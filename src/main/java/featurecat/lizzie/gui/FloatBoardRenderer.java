@@ -765,7 +765,8 @@ public class FloatBoardRenderer {
         if (displayedBranchLength < 2
             && Lizzie.config.limitMaxSuggestion > 0
             && mouseOverOrder > Lizzie.config.limitMaxSuggestion
-            && !suggestedMove.get().lastTimeUnlimited) {
+            && !suggestedMove.get().lastTimeUnlimited
+            && !(Lizzie.config.analyzeSgfBranches && suggestedMove.get().isSgfBranch)) {
           displayedBranchLength = 1;
           if (!Lizzie.config.autoReplayBranch) return;
         }
@@ -1531,14 +1532,22 @@ public class FloatBoardRenderer {
 
           int suggestionX = x + scaledMarginWidth + squareWidth * coords[0];
           int suggestionY = y + scaledMarginHeight + squareHeight * coords[1];
+          if (Lizzie.config.analyzeSgfBranches && move.isSgfBranch && !branchOpt.isPresent()) {
+            g.setColor(new Color(180, 40, 180));
+            int marker = Math.max(2, stoneRadius / 5);
+            g.fillOval(suggestionX + stoneRadius - marker, suggestionY - stoneRadius,
+                marker * 2, marker * 2);
+          }
           boolean isMouseOver =
               Lizzie.frame.floatBoard != null
                   && Lizzie.frame.floatBoard.isMouseOver(coords[0], coords[1]);
-          boolean lackOfPlayouts = percentPlayouts <= Lizzie.config.minPlayoutRatioForStats;
+          boolean lackOfPlayouts = percentPlayouts <= Lizzie.config.minPlayoutRatioForStats
+              && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
           boolean outOfOrder =
               Lizzie.config.limitMaxSuggestion > 0
                   && move.order + 1 > Lizzie.config.limitMaxSuggestion
-                  && !move.lastTimeUnlimited;
+                  && !move.lastTimeUnlimited
+                  && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
           boolean hasBackground =
               Board.getIndex(coords[0], coords[1]) < hasDrawBackground.length
                   ? hasDrawBackground[Board.getIndex(coords[0], coords[1])]
@@ -2117,7 +2126,8 @@ public class FloatBoardRenderer {
           boolean outOfOrder =
               Lizzie.config.limitMaxSuggestion > 0
                   && move.order + 1 > Lizzie.config.limitMaxSuggestion
-                  && !move.lastTimeUnlimited;
+                  && !move.lastTimeUnlimited
+                  && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
 
           if (!outOfOrder && move.order < 25) {
             continue;

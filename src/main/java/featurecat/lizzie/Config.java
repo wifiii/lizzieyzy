@@ -162,6 +162,8 @@ public class Config {
   public boolean appendWinrateToComment = true;
   public int boardPositionProportion = 4;
   public int limitBranchLength = 0;
+  public volatile boolean analyzeSgfBranches = false;
+  public volatile int sgfBranchMinVisits = 1000;
   public int limitMaxSuggestion = 10;
   public boolean showNoSuggCircle = false;
   public int moveListWinrateThreshold = 0;
@@ -1209,6 +1211,8 @@ public class Config {
     showPreviousBestmovesOnlyFirstMove =
         uiConfig.optBoolean("show-previous-bestmoves-only-first-move", true);
     showDetailedToolbarMenu = uiConfig.optBoolean("show-detailed-toolbar-menu", false);
+    analyzeSgfBranches = uiConfig.optBoolean("analyze-sgf-branches", false);
+    sgfBranchMinVisits = Math.max(1, uiConfig.optInt("sgf-branch-min-visits", 1000));
     selectAllowMoves = uiConfig.optInt("select-allow-moves", 999);
     selectAvoidMoves = uiConfig.optInt("select-avoid-moves", 999);
     selectAllowCustomMoves = uiConfig.optInt("select-allow-custom-moves", 5);

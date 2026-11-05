@@ -62,6 +62,10 @@ public class Leelaz {
   private BufferedReader errorStream;
 
   // public Board board;
+  private final BranchAnalysis branchAnalysis = new BranchAnalysis();
+  private final ThreadLocal<Boolean> branchCommand = new ThreadLocal<>();
+  private List<MoveData> branchOrdinary = new ArrayList<>();
+  private boolean branchSearchRejected;
   private List<MoveData> bestMoves;
   private List<MoveData> bestMovesPrevious;
   // private List<MoveData> bestMovesTemp;
@@ -653,6 +657,8 @@ public class Leelaz {
         //			break;
       }
     }
+    if (canAnalyzeSgfBranches())
+      branchAnalysis.normal(Lizzie.board.getHistory().getCurrentHistoryNode(), bestMoves);
     currentTotalPlayouts = MoveData.getPlayouts(bestMoves);
     ArrayList<Double> estimateArray = new ArrayList<Double>();
     if (Lizzie.config.showKataGoEstimate) {
@@ -1135,6 +1141,12 @@ public class Leelaz {
   private void parseLine(String line) {
     // System.out.println(line);
     synchronized (this) {
+      if (line.startsWith("?") && branchAnalysis.isActive()) {
+        branchSearchRejected = true;
+        branchAnalysis.clear();
+        System.err.println("SGF branch analysis rejected by engine: " + line);
+        sendBranchCommand("kata-analyze " + maybeAddPlayer() + getInterval() + addKataTag());
+      }
       if (line.startsWith("info")) {
         if ((isResponseUpToDate())) {
           if (EngineManager.isEngineGame) {
@@ -1153,6 +1165,7 @@ public class Leelaz {
               }
             } else Lizzie.leelaz = this;
           }
+          if (handleSgfBranchInfo(line.substring(5))) return;
           // Clear switching prompt
           // switching = false;
 
@@ -1166,6 +1179,14 @@ public class Leelaz {
             this.bestMoves = parseInfoSai(line.substring(5));
           } else {
             this.bestMoves = parseInfo(line.substring(5));
+          }
+          if (canAnalyzeSgfBranches() && !this.bestMoves.isEmpty()) {
+            branchOrdinary = new ArrayList<>(Lizzie.board.getData().bestMoves);
+            showSgfBranchResults();
+            if (startNextSgfBranch()) {
+              Lizzie.frame.refresh(1);
+              return;
+            }
           }
           if (!this.bestMoves.isEmpty()) {
             notifyAutoPK(false);
@@ -2499,6 +2520,10 @@ public class Leelaz {
    * @param command a GTP command containing no newline characters
    */
   public void sendCommand(String command) {
+    if (!Boolean.TRUE.equals(branchCommand.get())) {
+      branchAnalysis.clear();
+      branchSearchRejected = false;
+    }
     if (Lizzie.config.isDoubleEngineMode()) {
       if ((command.startsWith("heat") || command.startsWith("kata-raw"))
           && !this.isKatago
@@ -2568,6 +2593,8 @@ public class Leelaz {
   }
 
   public void sendCommandNoLeelaz2(String command) {
+    branchAnalysis.clear();
+    branchSearchRejected = false;
     if (Lizzie.config.isDoubleEngineMode()) {
       if ((command.startsWith("heat") || command.startsWith("kata-raw"))
           && !this.isKatago
@@ -2955,6 +2982,94 @@ public class Leelaz {
     }
   }
 
+  private boolean canAnalyzeSgfBranches() {
+    return Lizzie.config.analyzeSgfBranches && isKatago && this == Lizzie.leelaz
+        && isPondering && !noAnalyze && !isheatmap && !branchSearchRejected
+        && !Lizzie.config.isDoubleEngineMode() && !EngineManager.isEngineGame
+        && !Lizzie.config.isAutoAna && !Lizzie.frame.isPlayingAgainstLeelaz
+        && !Lizzie.frame.isAnaPlayingAgainstLeelaz
+        && !Lizzie.frame.isKeepingForce && !LizzieFrame.isKeepForcing
+        && !LizzieFrame.isTempForcing;
+  }
+
+  private java.util.Set<String> sgfBranchTargets() {
+    java.util.Set<String> targets = new java.util.LinkedHashSet<>();
+    BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
+    Stone color = node.getData().blackToPlay ? Stone.BLACK : Stone.WHITE;
+    for (BoardHistoryNode child : new ArrayList<>(node.getVariations())) {
+      BoardData data = child.getData();
+      if (data.dummy || data.lastMoveColor != color
+          || data.moveNumber <= node.getData().moveNumber) continue;
+      if (data.lastMove.isPresent()) {
+        int[] xy = data.lastMove.get();
+        if (node.getData().stones[Board.getIndex(xy[0], xy[1])] != Stone.EMPTY) continue;
+        targets.add(Board.convertCoordinatesToName(xy[0], xy[1]));
+      } else targets.add("pass");
+    }
+    return targets;
+  }
+
+  private void sendBranchCommand(String command) {
+    branchCommand.set(true);
+    try { sendCommand(command); }
+    finally { branchCommand.remove(); }
+  }
+
+  private boolean startNextSgfBranch() {
+    if (!canAnalyzeSgfBranches()) return false;
+    String target = branchAnalysis.next(sgfBranchTargets(), Lizzie.config.sgfBranchMinVisits);
+    if (target == null) return false;
+    sendBranchCommand("kata-analyze " + maybeAddPlayer() + getInterval()
+        + " allow " + (Lizzie.board.getData().blackToPlay ? "B" : "W")
+        + " " + target + " 1" + addKataTag());
+    return true;
+  }
+
+  private void showSgfBranchResults() {
+    bestMoves = branchAnalysis.display(branchOrdinary, sgfBranchTargets());
+    // Deliberately bypass root winrate, score, ownership and total-visit updates.
+    Lizzie.board.getData().bestMoves = new ArrayList<>(bestMoves);
+    java.util.Set<String> targets = sgfBranchTargets();
+    List<MoveData> outOfRange = Lizzie.board.getData().bestMovesOutOfRange == null
+        ? new ArrayList<>() : new ArrayList<>(Lizzie.board.getData().bestMovesOutOfRange);
+    outOfRange.removeIf(move -> targets.contains(move.coordinate));
+    Lizzie.board.getData().bestMovesOutOfRange = outOfRange;
+  }
+
+  private boolean handleSgfBranchInfo(String line) {
+    if (!branchAnalysis.isActive()) return false;
+    if (!canAnalyzeSgfBranches()
+        || !branchAnalysis.isPosition(Lizzie.board.getHistory().getCurrentHistoryNode())) {
+      branchAnalysis.clear();
+      if (isPondering) ponder();
+      return true;
+    }
+    if (!sgfBranchTargets().contains(branchAnalysis.activeMove())) {
+      showSgfBranchResults();
+      if (!startNextSgfBranch())
+        sendBranchCommand("kata-analyze " + maybeAddPlayer() + getInterval() + addKataTag());
+      return true;
+    }
+    List<MoveData> moves = new ArrayList<>();
+    for (String info : line.split("ownership")[0].split(" info ")) {
+      if (!info.trim().isEmpty()) moves.add(MoveData.fromInfoKatago(info));
+    }
+    boolean complete = branchAnalysis.accept(moves, Lizzie.config.sgfBranchMinVisits);
+    showSgfBranchResults();
+    if (complete && !startNextSgfBranch()) {
+      sendBranchCommand("kata-analyze " + maybeAddPlayer() + getInterval() + addKataTag());
+    }
+    Lizzie.frame.refresh(1);
+    return true;
+  }
+
+  /** Apply changed options without enabling analysis if it was paused. */
+  public synchronized void refreshSgfBranchAnalysis() {
+    branchAnalysis.clear();
+    branchSearchRejected = false;
+    if (isPondering) ponder();
+  }
+
   public void analyzeAvoid(String type, String color, String coordList, int untilMove) {
     analyzeAvoid(
         String.format(
@@ -3144,6 +3259,7 @@ public class Leelaz {
 
   /** End the process */
   public void shutdown() {
+    branchAnalysis.clear();
     leela0110StopPonder();
     if (this.useJavaSSH) {
       javaSSH.close();
@@ -3159,6 +3275,7 @@ public class Leelaz {
   }
 
   public void clearBestMoves() {
+    branchAnalysis.clear();
     bestMoves = new ArrayList<>();
     currentTotalPlayouts = 0;
   }
@@ -3226,8 +3343,11 @@ public class Leelaz {
       stats.totalPlayouts = currentTotalPlayouts;
 
       // stats.maxWinrate = bestMoves.get(0).winrate;
-      stats.maxWinrate = BoardData.getWinrateFromBestMoves(bestMoves);
-      stats.scoreLead = BoardData.getScoreLeadFromBestMoves(bestMoves);
+      List<MoveData> statsMoves = branchAnalysis.isPosition(
+          Lizzie.board.getHistory().getCurrentHistoryNode()) && !branchOrdinary.isEmpty()
+          ? branchOrdinary : bestMoves;
+      stats.maxWinrate = BoardData.getWinrateFromBestMoves(statsMoves);
+      stats.scoreLead = BoardData.getScoreLeadFromBestMoves(statsMoves);
       // BoardData.getWinrateFromBestMoves(moves);
     }
 

@@ -3138,6 +3138,38 @@ public class Menu extends JMenuBar {
         });
     analyzeMenu.add(togglePonder);
 
+    JFontMenuItem sgfBranchSettings =
+        new JFontMenuItem(resourceBundle.getString("Menu.sgfBranchAnalysis"));
+    sgfBranchSettings.addActionListener(e -> {
+      JCheckBox enabled = new JCheckBox(
+          resourceBundle.getString("BranchAnalysis.enabled"), Lizzie.config.analyzeSgfBranches);
+      JSpinner minimum = new JSpinner(new SpinnerNumberModel(
+          Lizzie.config.sgfBranchMinVisits, 1, Integer.MAX_VALUE, 100));
+      JPanel branchPanel = new JPanel();
+      branchPanel.setLayout(new BoxLayout(branchPanel, BoxLayout.Y_AXIS));
+      branchPanel.add(enabled);
+      branchPanel.add(new JLabel(resourceBundle.getString("BranchAnalysis.minimum")));
+      branchPanel.add(minimum);
+      branchPanel.add(new JLabel(resourceBundle.getString("BranchAnalysis.scope")));
+      if (JOptionPane.showConfirmDialog(Lizzie.frame, branchPanel,
+          resourceBundle.getString("Menu.sgfBranchAnalysis"), JOptionPane.OK_CANCEL_OPTION,
+          JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+      try {
+        minimum.commitEdit();
+      } catch (java.text.ParseException ex) {
+        JOptionPane.showMessageDialog(Lizzie.frame, resourceBundle.getString("BranchAnalysis.invalid"));
+        return;
+      }
+      Lizzie.config.analyzeSgfBranches = enabled.isSelected();
+      Lizzie.config.sgfBranchMinVisits = ((Number) minimum.getValue()).intValue();
+      Lizzie.config.uiConfig.put("analyze-sgf-branches", Lizzie.config.analyzeSgfBranches);
+      Lizzie.config.uiConfig.put("sgf-branch-min-visits", Lizzie.config.sgfBranchMinVisits);
+      try { Lizzie.config.save(); } catch (IOException ex) { ex.printStackTrace(); }
+      if (Lizzie.leelaz != null) Lizzie.leelaz.refreshSgfBranchAnalysis();
+      Lizzie.frame.refresh(1);
+    });
+    analyzeMenu.add(sgfBranchSettings);
+
     final JFontMenuItem hawkEye2 =
         new JFontMenuItem(resourceBundle.getString("Menu.hawkEye")); // ("超级鹰眼(T)");
     hawkEye2.addActionListener(

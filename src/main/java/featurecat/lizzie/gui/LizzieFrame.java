@@ -5514,7 +5514,8 @@ public class LizzieFrame extends JFrame {
                     .isKatago))) {
       isKataStyle = true;
       if (!curData.bestMoves.isEmpty()) {
-        double score = curData.bestMoves.get(0).scoreMean;
+        double score = Lizzie.config.analyzeSgfBranches && curData.bestMoves.get(0).isSgfBranch
+            ? curData.scoreMean : curData.bestMoves.get(0).scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
           if (curData.blackToPlay) {
             score = score + curData.getKomi();

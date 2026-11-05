@@ -1543,7 +1543,8 @@ public class BoardRenderer {
       if (!(Lizzie.config.autoReplayBranch
           && Lizzie.config.autoReplayDisplayEntireVariationsFirst)) {
         if (displayedBranchLength < 2
-            && ((percentPlayouts <= Lizzie.config.minPlayoutRatioForStats && !needShow)
+            && ((percentPlayouts <= Lizzie.config.minPlayoutRatioForStats && !needShow
+                && !(Lizzie.config.analyzeSgfBranches && suggestedMove.get().isSgfBranch))
                 || Lizzie.config.autoReplayBranch)) {
           displayedBranchLength = 1;
           if (!Lizzie.config.autoReplayBranch) return;
@@ -1552,7 +1553,8 @@ public class BoardRenderer {
             && Lizzie.config.limitMaxSuggestion > 0
             && mouseOverOrder > Lizzie.config.limitMaxSuggestion
             && !needShow
-            && !suggestedMove.get().lastTimeUnlimited) {
+            && !suggestedMove.get().lastTimeUnlimited
+            && !(Lizzie.config.analyzeSgfBranches && suggestedMove.get().isSgfBranch)) {
           displayedBranchLength = 1;
           if (!Lizzie.config.autoReplayBranch) return;
         }
@@ -2374,15 +2376,23 @@ public class BoardRenderer {
 
           int suggestionX = x + scaledMarginWidth + squareWidth * coords[0];
           int suggestionY = y + scaledMarginHeight + squareHeight * coords[1];
+          if (Lizzie.config.analyzeSgfBranches && move.isSgfBranch && !branchOpt.isPresent()) {
+            g.setColor(new Color(180, 40, 180));
+            int marker = Math.max(2, stoneRadius / 5);
+            g.fillOval(suggestionX + stoneRadius - marker, suggestionY - stoneRadius,
+                marker * 2, marker * 2);
+          }
           boolean isMouseOver =
               isIndependBoard
                   ? Lizzie.frame.independentMainBoard.isMouseOver(coords[0], coords[1])
                   : Lizzie.frame.isMouseOver(coords[0], coords[1]);
-          boolean lackOfPlayouts = percentPlayouts <= Lizzie.config.minPlayoutRatioForStats;
+          boolean lackOfPlayouts = percentPlayouts <= Lizzie.config.minPlayoutRatioForStats
+              && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
           boolean outOfOrder =
               Lizzie.config.limitMaxSuggestion > 0
                   && move.order + 1 > Lizzie.config.limitMaxSuggestion
-                  && !move.lastTimeUnlimited;
+                  && !move.lastTimeUnlimited
+                  && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
           boolean hasBackground =
               Board.getIndex(coords[0], coords[1]) < hasDrawBackground.length
                   ? hasDrawBackground[Board.getIndex(coords[0], coords[1])]
@@ -3015,7 +3025,8 @@ public class BoardRenderer {
           boolean outOfOrder =
               Lizzie.config.limitMaxSuggestion > 0
                   && move.order + 1 > Lizzie.config.limitMaxSuggestion
-                  && !move.lastTimeUnlimited;
+                  && !move.lastTimeUnlimited
+                  && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
           if (!outOfOrder && move.order < 20) {
             continue;
           }
