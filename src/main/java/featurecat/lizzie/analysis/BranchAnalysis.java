@@ -11,12 +11,14 @@ public final class BranchAnalysis {
   private Object position;
   private final Map<String, MoveData> normal = new LinkedHashMap<>();
   private final Map<String, MoveData> supplemental = new LinkedHashMap<>();
+  private final Map<String, Integer> normalRanks = new LinkedHashMap<>();
   private final Map<String, MoveData> observed = new LinkedHashMap<>();
   private String active;
 
   public synchronized void clear() {
     position = null;
     normal.clear();
+    normalRanks.clear();
     supplemental.clear();
     observed.clear();
     active = null;
@@ -38,8 +40,10 @@ public final class BranchAnalysis {
     if (position != node) clear();
     position = node;
     normal.clear();
+    normalRanks.clear();
     for (MoveData move : moves) {
       normal.put(move.coordinate, move);
+      normalRanks.put(move.coordinate, move.order);
       MoveData previous = observed.get(move.coordinate);
       if (previous == null || previous.playouts <= move.playouts) observed.put(move.coordinate, move);
     }
@@ -69,9 +73,25 @@ public final class BranchAnalysis {
     return false;
   }
 
-  public synchronized java.util.Set<String> observedCoordinates() {
-    java.util.Set<String> result = new java.util.LinkedHashSet<>(observed.keySet());
-    result.removeIf(c -> c.equalsIgnoreCase("pass"));
+  /** Only the current ordinary ranking is eligible; raw/history-only moves are not admitted. */
+  public synchronized Set<String> candidateCoordinates(int maximum, double minimumRatio) {
+    Set<String> result = new java.util.LinkedHashSet<>();
+    List<MoveData> ranked = new ArrayList<>(normal.values());
+    ranked.sort(java.util.Comparator.comparingInt(move -> normalRanks.get(move.coordinate)));
+    int maxVisits = 0;
+    int counted = 0;
+    for (MoveData move : ranked) {
+      if (maximum > 0 && (normalRanks.get(move.coordinate) >= maximum || counted >= maximum)) continue;
+      maxVisits = Math.max(maxVisits, move.playouts);
+      counted++;
+    }
+    for (MoveData move : ranked) {
+      int rank = normalRanks.get(move.coordinate);
+      if (maximum > 0 && (rank >= maximum || result.size() >= maximum)) continue;
+      if (move.coordinate.equalsIgnoreCase("pass") || move.playouts <= 0) continue;
+      if (rank > 0 && (double) move.playouts / Math.max(1, maxVisits) <= minimumRatio) continue;
+      result.add(move.coordinate);
+    }
     return result;
   }
 
@@ -85,17 +105,26 @@ public final class BranchAnalysis {
 
   /** Keep ordinary engine ordering; restricted-search order 0 is not an overall ranking. */
   public synchronized List<MoveData> display(List<MoveData> ordinary, Set<String> targets) {
-    return display(ordinary, targets, false);
+    return display(ordinary, targets, java.util.Collections.emptySet(), 0);
   }
 
   public synchronized List<MoveData> display(List<MoveData> ordinary, Set<String> branches,
-      boolean includeObserved) {
-    List<MoveData> result = new ArrayList<>(ordinary);
+      Set<String> candidates, int maximum) {
+    List<MoveData> result = new ArrayList<>();
+    for (MoveData move : ordinary) {
+      Integer rank = normalRanks.get(move.coordinate);
+      if (rank == null) continue;
+      if (maximum > 0 && (rank >= maximum || result.size() >= maximum)
+          && !move.lastTimeUnlimited && !branches.contains(move.coordinate)) continue;
+      move.order = rank;
+      result.add(move);
+    }
+    result.sort(java.util.Comparator.comparingInt(move -> normalRanks.get(move.coordinate)));
     Set<String> targets = new java.util.LinkedHashSet<>(branches);
-    if (includeObserved) targets.addAll(observedCoordinates());
+    targets.addAll(candidates);
     for (MoveData move : result) {
       move.isSgfBranch = branches.contains(move.coordinate);
-      move.isSupplementalCandidate = includeObserved && targets.contains(move.coordinate);
+      move.isSupplementalCandidate = candidates.contains(move.coordinate);
     }
     for (String target : targets) {
       MoveData move = best(target);
@@ -105,7 +134,7 @@ public final class BranchAnalysis {
         if (target.equalsIgnoreCase(result.get(i).coordinate)) { index = i; break; }
       }
       move.isSgfBranch = branches.contains(target);
-      move.isSupplementalCandidate = includeObserved;
+      move.isSupplementalCandidate = candidates.contains(target);
       move.order = index >= 0 ? result.get(index).order : result.size();
       if (index >= 0) result.set(index, move);
       else result.add(move);

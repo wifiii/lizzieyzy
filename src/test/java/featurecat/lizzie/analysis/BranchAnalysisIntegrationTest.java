@@ -54,6 +54,8 @@ public class BranchAnalysisIntegrationTest {
     Lizzie.config.analyzeSgfBranches = true;
     Lizzie.config.sgfBranchMinVisits = 1000;
     Lizzie.config.limitMaxSuggestion = 1;
+    Lizzie.config.minPlayoutRatioForStats = 0;
+    Lizzie.config.showNoSuggCircle = false;
     Lizzie.config.limitPlayout = false;
     Lizzie.config.limitTime = false;
     Lizzie.config.stopAtEmptyBoard = false;
@@ -160,34 +162,34 @@ public class BranchAnalysisIntegrationTest {
       assertFalse("Deleted branch result leaked", "A19".equals(move.coordinate));
   }
 
-  @Test public void candidateTopUpWaitsForOrdinaryLimitAndRestoresOmittedMoves() throws Exception {
+  @Test public void candidateTopUpWaitsForOrdinaryLimitAndUsesEligibleMoves() throws Exception {
     Lizzie.config.analyzeSgfBranches = false;
     Lizzie.config.supplementCandidates = true;
+    Lizzie.config.limitMaxSuggestion = 2;
     Lizzie.config.candidateMinVisits = 200;
     Lizzie.config.limitPlayout = true;
     Lizzie.config.limitPlayouts = 10000;
     info(move("Q16", 80, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
     assertFalse(commands.toString("UTF-8").contains("allow"));
-    assertEquals(1, find("T1").playouts);
     commands.reset();
-    info(move("Q16", 10000, 0.6));
+    info(move("Q16", 10000, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
     assertTrue(commands.toString("UTF-8").contains("allow B T1 1"));
     assertTrue(engine.isPondering());
     info(move("T1", 200, 0.01));
     assertFalse(engine.isPondering());
     assertEquals(200, find("T1").playouts);
-    assertEquals(10000, engine.getBestMovesPlayouts());
-    assertTrue(commands.toString("UTF-8").contains("stop"));
+    assertEquals(10001, engine.getBestMovesPlayouts());
   }
 
   @Test public void generalTopUpRunsAfterBranchMinimumAndPrimaryLimit() throws Exception {
     Lizzie.config.supplementCandidates = true;
+    Lizzie.config.limitMaxSuggestion = 2;
     Lizzie.config.candidateMinVisits = 200;
     Lizzie.config.limitPlayout = true;
     Lizzie.config.limitPlayouts = 10000;
     info(move("Q16", 5000, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
     assertFalse(commands.toString("UTF-8").contains("allow"));
-    info(move("Q16", 10000, 0.6));
+    info(move("Q16", 10000, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
     info(move("A19", 1000, 0.5));
     info(move("B18", 1000, 0.4));
     info(move("pass", 1000, 0.3));
@@ -199,6 +201,7 @@ public class BranchAnalysisIntegrationTest {
   @Test public void manualPauseCancelsCandidateTopUp() throws Exception {
     Lizzie.config.analyzeSgfBranches = false;
     Lizzie.config.supplementCandidates = true;
+    Lizzie.config.limitMaxSuggestion = 2;
     Lizzie.config.limitPlayout = true;
     Lizzie.config.limitPlayouts = 100;
     info(move("Q16", 100, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
@@ -208,6 +211,64 @@ public class BranchAnalysisIntegrationTest {
     assertFalse(engine.isPondering());
     assertFalse(commands.toString("UTF-8").contains("allow"));
     assertEquals(1, find("T1").playouts);
+  }
+
+  @Test public void historicalAndOutOfLimitMovesAreNotToppedUpOrRestored() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.supplementCandidates = true;
+    Lizzie.config.limitMaxSuggestion = 2;
+    Lizzie.config.limitPlayout = true;
+    Lizzie.config.limitPlayouts = 1000;
+    info(move("Q16", 80, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
+    commands.reset();
+    info(move("Q16", 1000, 0.6) + " info " + move("D4", 1, 0.5).replace("order 0", "order 1"));
+    assertTrue(commands.toString("UTF-8").contains("allow B D4 1"));
+    assertFalse(commands.toString("UTF-8").contains("allow B T1 1"));
+    for (MoveData move : engine.getBestMoves()) assertFalse(move.coordinate.equals("T1"));
+    info(move("D4", 200, 0.5));
+    assertFalse(engine.isPondering());
+    assertEquals(2, engine.getBestMoves().size());
+  }
+
+  @Test public void shrinkingCandidateLimitCancelsTheNowExcludedTarget() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.supplementCandidates = true;
+    Lizzie.config.limitMaxSuggestion = 2;
+    Lizzie.config.limitPlayout = true;
+    Lizzie.config.limitPlayouts = 1000;
+    info(move("Q16", 1000, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
+    assertTrue(commands.toString("UTF-8").contains("allow B T1 1"));
+    Lizzie.config.limitMaxSuggestion = 1;
+    commands.reset();
+    info(move("T1", 200, 0.01));
+    assertFalse(engine.isPondering());
+    assertEquals(1, engine.getBestMoves().size());
+    assertEquals("Q16", engine.getBestMoves().get(0).coordinate);
+  }
+
+  @Test public void aFullBoardEngineReportOnlyTopsUpTheLimitedCandidates() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.supplementCandidates = true;
+    Lizzie.config.limitMaxSuggestion = 3;
+    Lizzie.config.showNoSuggCircle = true;
+    Lizzie.config.limitPlayout = true;
+    Lizzie.config.limitPlayouts = 1000;
+    StringBuilder report = new StringBuilder();
+    for (int x = 0; x < 19; x++) for (int y = 0; y < 19; y++) {
+      int rank = x * 19 + y;
+      if (report.length() > 0) report.append(" info ");
+      report.append(move(featurecat.lizzie.rules.Board.convertCoordinatesToName(x, y),
+          rank == 0 ? 1000 : 1, 0.5).replace("order 0", "order " + rank));
+    }
+    info(report.toString());
+    assertEquals(3, engine.getBestMoves().size());
+    assertTrue(commands.toString("UTF-8").contains("allow B A18 1"));
+    info(move("A18", 200, 0.5));
+    assertTrue(commands.toString("UTF-8").contains("allow B A17 1"));
+    info(move("A17", 200, 0.5));
+    assertFalse(engine.isPondering());
+    assertFalse(commands.toString("UTF-8").contains("allow B A16 1"));
+    assertEquals(3, engine.getBestMoves().size());
   }
 
   @Test public void passSearchAlternatesAndDoesNotCorruptNormalStatistics() throws Exception {
@@ -357,6 +418,20 @@ public class BranchAnalysisIntegrationTest {
             if (color.getRed() > 220 && color.getBlue() > 220 && color.getGreen() < 30) purplePixels++;
           }
           assertTrue("Bad candidate was not painted with theme's purple color", purplePixels > 20);
+          for (boolean withValue : new boolean[] {false, true}) {
+            Lizzie.config.showMoveValue = withValue;
+            Lizzie.config.showScoremeanInSuggestion = !withValue;
+            Lizzie.frame.refresh(1);
+            java.awt.image.BufferedImage threeRows = new java.awt.image.BufferedImage(1280, 900,
+                java.awt.image.BufferedImage.TYPE_INT_RGB);
+            java.awt.Graphics2D threeGraphics = threeRows.createGraphics();
+            Lizzie.frame.paint(threeGraphics);
+            threeGraphics.dispose();
+            javax.imageio.ImageIO.write(threeRows, "png", new File(withValue
+                ? "supplemental-3row-value-ui.png" : "supplemental-3row-score-ui.png"));
+          }
+          Lizzie.config.showMoveValue = true;
+          Lizzie.config.showScoremeanInSuggestion = true;
         } catch (Exception error) { throw new RuntimeException(error); }
       });
       assertEquals(originalComment, Lizzie.board.getData().comment);
@@ -431,7 +506,7 @@ public class BranchAnalysisIntegrationTest {
       }
       assertTrue("Real KataGo did not complete all SGF branches; inspect katago-test-stderr.log", complete);
       System.out.println(extended
-          ? "Real KataGo: normal limit, pass value, all branches and observed candidates completed"
+          ? "Real KataGo: normal limit, pass value, all branches and limited candidates completed"
           : "Real KataGo: A19, B18 and pass each reached >=8 visits");
       engine.sendCommand("stop");
     } finally {

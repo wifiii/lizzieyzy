@@ -3085,6 +3085,13 @@ public class Leelaz {
     }
   }
 
+  private java.util.Set<String> candidateTargets() {
+    return Lizzie.config.supplementCandidates
+        ? branchAnalysis.candidateCoordinates(Lizzie.config.limitMaxSuggestion,
+            Lizzie.config.minPlayoutRatioForStats)
+        : java.util.Collections.emptySet();
+  }
+
   private boolean startNextSupplemental() {
     if (!canUseSupplemental()) return false;
     if (passNeedsWork() && (primaryLimitReached
@@ -3098,7 +3105,7 @@ public class Leelaz {
       if (target != null) { startRestricted("branch", target); return true; }
     }
     if (primaryLimitReached && Lizzie.config.supplementCandidates) {
-      target = branchAnalysis.next(branchAnalysis.observedCoordinates(), Lizzie.config.candidateMinVisits);
+      target = branchAnalysis.next(candidateTargets(), Lizzie.config.candidateMinVisits);
       if (target != null) { startRestricted("candidate", target); return true; }
     }
     supplementalKind = "";
@@ -3117,8 +3124,8 @@ public class Leelaz {
   }
 
   private void showSgfBranchResults() {
-    bestMoves = branchAnalysis.display(branchOrdinary, sgfBranchTargets(),
-        Lizzie.config.supplementCandidates);
+    bestMoves = branchAnalysis.display(branchOrdinary, sgfBranchTargets(), candidateTargets(),
+        Lizzie.config.limitMaxSuggestion);
     // Restricted-search values never overwrite root winrate, score or total visits.
     Lizzie.board.getData().bestMoves = new ArrayList<>(bestMoves);
     java.util.Set<String> visible = new java.util.HashSet<>();
@@ -3140,7 +3147,8 @@ public class Leelaz {
     }
     String kind = supplementalKind;
     String target = branchAnalysis.activeMove();
-    if (kind.equals("branch") && !sgfBranchTargets().contains(target)) {
+    if ((kind.equals("branch") && !sgfBranchTargets().contains(target))
+        || (kind.equals("candidate") && !candidateTargets().contains(target))) {
       branchAnalysis.start(null);
       if (!startNextSupplemental()) {
         if (primaryLimitReached) finishSupplemental();
