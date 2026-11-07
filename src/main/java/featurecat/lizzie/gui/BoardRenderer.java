@@ -2377,12 +2377,6 @@ public class BoardRenderer {
 
           int suggestionX = x + scaledMarginWidth + squareWidth * coords[0];
           int suggestionY = y + scaledMarginHeight + squareHeight * coords[1];
-          if (Lizzie.config.analyzeSgfBranches && move.isSgfBranch && !branchOpt.isPresent()) {
-            g.setColor(new Color(180, 40, 180));
-            int marker = Math.max(2, stoneRadius / 5);
-            g.fillOval(suggestionX + stoneRadius - marker, suggestionY - stoneRadius,
-                marker * 2, marker * 2);
-          }
           boolean isMouseOver =
               isIndependBoard
                   ? Lizzie.frame.independentMainBoard.isMouseOver(coords[0], coords[1])

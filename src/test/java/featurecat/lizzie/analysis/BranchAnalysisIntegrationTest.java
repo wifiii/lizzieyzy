@@ -48,6 +48,10 @@ public class BranchAnalysisIntegrationTest {
     Lizzie.config.supplementCandidates = false;
     Lizzie.config.analyzePassValue = false;
     Lizzie.config.showMoveValue = false;
+    Lizzie.config.suggestionInfoWinrate = 1;
+    Lizzie.config.suggestionInfoPlayouts = 2;
+    Lizzie.config.suggestionInfoScoreLead = 3;
+    Lizzie.config.suggestionInfoValue = 4;
     Lizzie.config.analyzeSgfBranches = false;
     engine.isKatago = false;
     SGFParser.loadFromString("(;GM[1]FF[4]SZ[19](;B[aa])(;B[bb])(;B[]))");
@@ -509,6 +513,116 @@ public class BranchAnalysisIntegrationTest {
       EngineManager.isEmpty = wasEmpty;
       Lizzie.config.appendWinrateToComment = appendedBefore;
     }
+  }
+
+  private Object dialogField(Object dialog, String name) throws Exception {
+    Field field = dialog.getClass().getDeclaredField(name);
+    field.setAccessible(true);
+    return field.get(dialog);
+  }
+
+  @SuppressWarnings("unchecked")
+  private List<featurecat.lizzie.gui.SuggestionLabels.Row> previewRows(Object dialog, boolean kata)
+      throws Exception {
+    Method method = dialog.getClass().getDeclaredMethod("previewRows", boolean.class);
+    method.setAccessible(true);
+    return (List<featurecat.lizzie.gui.SuggestionLabels.Row>) method.invoke(dialog, kata);
+  }
+
+  private javax.swing.JButton dialogButton(java.awt.Container root, String text) {
+    for (java.awt.Component component : root.getComponents()) {
+      if (component instanceof javax.swing.JButton
+          && text.equals(((javax.swing.JButton) component).getText()))
+        return (javax.swing.JButton) component;
+      if (component instanceof java.awt.Container) {
+        javax.swing.JButton found = dialogButton((java.awt.Container) component, text);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
+  @Test public void cancellingFourItemOrderEditorLeavesSettingsUntouched() throws Exception {
+    javax.swing.SwingUtilities.invokeAndWait(() -> {
+      featurecat.lizzie.gui.SuggestionInfoOrderSettings dialog =
+          new featurecat.lizzie.gui.SuggestionInfoOrderSettings(Lizzie.frame);
+      try {
+        javax.swing.JCheckBox[] enabled = (javax.swing.JCheckBox[]) dialogField(dialog, "enabled");
+        javax.swing.JRadioButton[][] choices =
+            (javax.swing.JRadioButton[][]) dialogField(dialog, "choices");
+        enabled[3].doClick();
+        choices[0][3].doClick();
+        assertEquals("+11.3", previewRows(dialog, true).get(0).text);
+        dialogButton(dialog, Lizzie.resourceBundle.getString(
+            "SuggestionInfoOrderSettings.cancelButton")).doClick();
+        assertFalse(Lizzie.config.showMoveValue);
+        assertFalse(Lizzie.config.analyzePassValue);
+        assertEquals(4, Lizzie.config.suggestionInfoValue);
+        assertEquals(1, Lizzie.config.suggestionInfoWinrate);
+      } catch (Exception error) { throw new RuntimeException(error); }
+      finally { dialog.dispose(); }
+    });
+  }
+
+  @Test public void fourItemOrderEditorPreviewsPersistsAndRestoresValueOrder() throws Exception {
+    java.nio.file.Path configPath = java.nio.file.Paths.get(Lizzie.config.getConfigFilePath());
+    byte[] originalConfig = java.nio.file.Files.readAllBytes(configPath);
+    try {
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        java.util.ResourceBundle previous = Lizzie.resourceBundle;
+        Lizzie.resourceBundle = java.util.ResourceBundle.getBundle("l10n.DisplayStrings", Locale.CHINA);
+        featurecat.lizzie.gui.SuggestionInfoOrderSettings dialog =
+            new featurecat.lizzie.gui.SuggestionInfoOrderSettings(Lizzie.frame);
+        try {
+          javax.swing.JCheckBox[] enabled = (javax.swing.JCheckBox[]) dialogField(dialog, "enabled");
+          javax.swing.JRadioButton[][] choices =
+              (javax.swing.JRadioButton[][]) dialogField(dialog, "choices");
+          for (int i = 0; i < 3; i++) if (!enabled[i].isSelected()) enabled[i].doClick();
+          enabled[3].doClick();
+          assertEquals(4, previewRows(dialog, true).size());
+          choices[0][3].doClick();
+          assertTrue(choices[3][0].isSelected()); // displaced winrate moves to the fourth row
+          assertEquals("+11.3", previewRows(dialog, true).get(0).text);
+          assertEquals("68.5", previewRows(dialog, true).get(3).text);
+          assertEquals("730", previewRows(dialog, false).get(0).text);
+          assertEquals(2, previewRows(dialog, false).size());
+          enabled[0].doClick();
+          assertEquals(3, previewRows(dialog, true).size());
+          assertEquals(1, previewRows(dialog, false).size());
+          enabled[0].doClick();
+          dialog.setVisible(true);
+          dialog.validate();
+          java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(
+              dialog.getWidth(), dialog.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
+          java.awt.Graphics2D graphics = image.createGraphics();
+          dialog.paint(graphics);
+          graphics.dispose();
+          javax.imageio.ImageIO.write(image, "png", new File("suggestion-order-4rows-ui.png"));
+          dialogButton(dialog, Lizzie.resourceBundle.getString(
+              "SuggestionInfoOrderSettings.okButton")).doClick();
+          assertTrue(Lizzie.config.showMoveValue);
+          assertTrue(Lizzie.config.analyzePassValue);
+          assertEquals(1, Lizzie.config.suggestionInfoValue);
+          assertEquals(4, Lizzie.config.suggestionInfoWinrate);
+          featurecat.lizzie.gui.SuggestionInfoOrderSettings reopened =
+              new featurecat.lizzie.gui.SuggestionInfoOrderSettings(Lizzie.frame);
+          try {
+            javax.swing.JRadioButton[][] saved =
+                (javax.swing.JRadioButton[][]) dialogField(reopened, "choices");
+            assertTrue(saved[0][3].isSelected());
+            assertEquals("+11.3", previewRows(reopened, true).get(0).text);
+          } finally { reopened.dispose(); }
+        } catch (Exception error) { throw new RuntimeException(error); }
+        finally { dialog.dispose(); Lizzie.resourceBundle = previous; }
+      });
+      org.json.JSONObject saved = new org.json.JSONObject(new String(
+          java.nio.file.Files.readAllBytes(configPath), java.nio.charset.StandardCharsets.UTF_8))
+          .getJSONObject("ui");
+      assertEquals(1, saved.getInt("suggestion-info-value"));
+      assertEquals(4, saved.getInt("suggestion-info-winrate"));
+      assertTrue(saved.getBoolean("show-move-value"));
+      assertTrue(saved.getBoolean("analyze-pass-value"));
+    } finally { java.nio.file.Files.write(configPath, originalConfig); }
   }
 
   @Test public void realKataGoMeetsEveryBranchMinimum() throws Exception {

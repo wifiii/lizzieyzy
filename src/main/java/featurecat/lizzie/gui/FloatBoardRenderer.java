@@ -1533,12 +1533,6 @@ public class FloatBoardRenderer {
 
           int suggestionX = x + scaledMarginWidth + squareWidth * coords[0];
           int suggestionY = y + scaledMarginHeight + squareHeight * coords[1];
-          if (Lizzie.config.analyzeSgfBranches && move.isSgfBranch && !branchOpt.isPresent()) {
-            g.setColor(new Color(180, 40, 180));
-            int marker = Math.max(2, stoneRadius / 5);
-            g.fillOval(suggestionX + stoneRadius - marker, suggestionY - stoneRadius,
-                marker * 2, marker * 2);
-          }
           boolean isMouseOver =
               Lizzie.frame.floatBoard != null
                   && Lizzie.frame.floatBoard.isMouseOver(coords[0], coords[1]);

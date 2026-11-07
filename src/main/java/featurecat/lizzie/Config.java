@@ -476,6 +476,7 @@ public class Config {
   public int suggestionInfoWinrate = 1;
   public int suggestionInfoPlayouts = 2;
   public int suggestionInfoScoreLead = 3;
+  public int suggestionInfoValue = 4;
   public boolean useDefaultInfoRowOrder = true;
 
   public boolean useIinCoordsName = false;
@@ -1243,8 +1244,10 @@ public class Config {
     suggestionInfoWinrate = uiConfig.optInt("suggestion-info-winrate", 1);
     suggestionInfoPlayouts = uiConfig.optInt("suggestion-info-playouts", 2);
     suggestionInfoScoreLead = uiConfig.optInt("suggestion-info-scorelead", 3);
+    suggestionInfoValue = uiConfig.optInt("suggestion-info-value", 4);
     useDefaultInfoRowOrder =
-        suggestionInfoWinrate == 1 && suggestionInfoPlayouts == 2 && suggestionInfoScoreLead == 3;
+        suggestionInfoWinrate == 1 && suggestionInfoPlayouts == 2
+            && suggestionInfoScoreLead == 3 && suggestionInfoValue == 4;
     useIinCoordsName = uiConfig.optBoolean("use-i-in-coords-name", false);
     autoReplayBranch = uiConfig.optBoolean("auto-replay-branch", false);
     autoReplayDisplayEntireVariationsFirst =
@@ -2627,15 +2630,19 @@ public class Config {
     uiConfig.put("show-pure-estimate-small", showPureEstimateSmall);
   }
 
-  public void setSuggestionInfoOrdr(int winrateOrder, int playoutsOrder, int scoreLeadOrder) {
+  public void setSuggestionInfoOrdr(int winrateOrder, int playoutsOrder, int scoreLeadOrder,
+      int valueOrder) {
     suggestionInfoWinrate = winrateOrder;
     suggestionInfoPlayouts = playoutsOrder;
     suggestionInfoScoreLead = scoreLeadOrder;
+    suggestionInfoValue = valueOrder;
     useDefaultInfoRowOrder =
-        suggestionInfoWinrate == 1 && suggestionInfoPlayouts == 2 && suggestionInfoScoreLead == 3;
+        suggestionInfoWinrate == 1 && suggestionInfoPlayouts == 2
+            && suggestionInfoScoreLead == 3 && suggestionInfoValue == 4;
     uiConfig.put("suggestion-info-winrate", suggestionInfoWinrate);
     uiConfig.put("suggestion-info-playouts", suggestionInfoPlayouts);
     uiConfig.put("suggestion-info-scorelead", suggestionInfoScoreLead);
+    uiConfig.put("suggestion-info-value", suggestionInfoValue);
     try {
       save();
     } catch (IOException e) {

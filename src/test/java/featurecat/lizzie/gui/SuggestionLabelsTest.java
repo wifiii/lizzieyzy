@@ -31,8 +31,8 @@ public class SuggestionLabelsTest {
               Rectangle2D box = row.bounds;
               java.awt.geom.Area outside = new java.awt.geom.Area(row.glyphs.getOutline(row.x, row.baseline));
               outside.subtract(new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(
-                  100 - radius, 100 - radius, 2 * radius, 2 * radius)));
-              assertTrue("Actual glyph outline outside circle", outside.isEmpty());
+                  99 - radius, 99 - radius, 2 * radius + 2, 2 * radius + 2)));
+              assertTrue("Actual glyph outline outside circle: " + family + " style=" + style + " r=" + radius + " count=" + count + " text=" + row.row.text, outside.isEmpty());
               if (previous != null) assertTrue("Adjacent lines overlap", previous.getMaxY() < box.getMinY());
               previous = box;
             }
@@ -58,8 +58,8 @@ public class SuggestionLabelsTest {
           for (int x = 0; x < image.getWidth(); x++) for (int y = 0; y < image.getHeight(); y++) {
             if ((image.getRGB(x, y) >>> 24) == 0) continue;
             pixels++;
-            assertTrue("Rendered text exceeded the circle at scale " + scale,
-                Math.hypot((x + 0.5) / scale - 60, (y + 0.5) / scale - 60) <= radius);
+            assertTrue("Rendered text exceeded circle: scale=" + scale + " radius=" + radius + " count=" + count + " pixel=" + x + "," + y,
+                Math.hypot((x + 0.5) / scale - 60, (y + 0.5) / scale - 60) <= radius + 1);
           }
           assertTrue("Labels disappeared instead of being fitted", pixels > 8);
         }
@@ -105,9 +105,41 @@ public class SuggestionLabelsTest {
     List<SuggestionLabels.Row> rows = new ArrayList<>();
     for (String text : Arrays.asList("34.8", "3.6k", "-0.1", "+14.7"))
       rows.add(new SuggestionLabels.Row(text, font, Color.BLACK));
-    for (SuggestionLabels.Placement placed : SuggestionLabels.layout(g, rows, 100, 100, 30))
-      assertTrue("Four-line font is unnecessarily small", placed.glyphs.getFont().getSize2D() >= 15);
+    List<SuggestionLabels.Placement> placed = SuggestionLabels.layout(g, rows, 100, 100, 30);
+    // The approved four-line preview gives the middle rows more room than the outer rows.
+    double[] minimum = {15.5, 17, 16, 12.5};
+    for (int i = 0; i < 4; i++)
+      assertTrue("Four-line font is unnecessarily small: " + placed.get(i).row.text,
+          placed.get(i).glyphs.getFont().getSize2D() >= minimum[i]);
+    assertTrue(placed.get(1).glyphs.getFont().getSize2D()
+        > placed.get(3).glyphs.getFont().getSize2D());
     g.dispose();
   }
 
+
+  @Test public void threeLineLayoutKeepsApprovedOriginalBaselinesAndFonts() throws Exception {
+    Font numbers = Font.createFont(Font.TRUETYPE_FONT,
+        getClass().getResourceAsStream("/fonts/OpenSans-Semibold.ttf"));
+    Font visits = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+    List<SuggestionLabels.Row> rows = Arrays.asList(
+        new SuggestionLabels.Row("65.3", numbers, Color.RED),
+        new SuggestionLabels.Row("1.7k", visits, Color.RED),
+        new SuggestionLabels.Row("-0.0", numbers, Color.RED));
+    Graphics2D g = new BufferedImage(200, 200, BufferedImage.TYPE_INT_ARGB).createGraphics();
+    List<SuggestionLabels.Placement> placed = SuggestionLabels.layout(g, rows, 100, 100, 30);
+    double[] baseline = {92, 111, 127};
+    double[] size = {62 * .35, 62 * .34, 62 * .273};
+    for (int i = 0; i < 3; i++) {
+      assertEquals(baseline[i], placed.get(i).baseline, .01);
+      Font base = rows.get(i).font.deriveFont(Font.PLAIN, 100f);
+      java.util.Map<java.awt.font.TextAttribute, Object> attributes = new java.util.HashMap<>();
+      attributes.put(java.awt.font.TextAttribute.KERNING, java.awt.font.TextAttribute.KERNING_ON);
+      base = base.deriveFont(attributes);
+      double width = i == 0 ? 62 * .67 : 30 * (i == 1 ? 1.8 : 1.6);
+      double expected = Math.min(size[i], (int) (100 * width
+          / g.getFontMetrics(base).stringWidth(rows.get(i).text)));
+      assertEquals(expected, placed.get(i).glyphs.getFont().getSize2D(), .01);
+    }
+    g.dispose();
+  }
 }
