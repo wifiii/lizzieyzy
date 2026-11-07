@@ -11,6 +11,8 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Branch;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.MoveData;
+import featurecat.lizzie.analysis.SuggestionStyle;
+import featurecat.lizzie.analysis.MoveValue;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryNode;
@@ -766,7 +768,8 @@ public class FloatBoardRenderer {
             && Lizzie.config.limitMaxSuggestion > 0
             && mouseOverOrder > Lizzie.config.limitMaxSuggestion
             && !suggestedMove.get().lastTimeUnlimited
-            && !(Lizzie.config.analyzeSgfBranches && suggestedMove.get().isSgfBranch)) {
+            && !((Lizzie.config.analyzeSgfBranches && suggestedMove.get().isSgfBranch)
+                || (Lizzie.config.supplementCandidates && suggestedMove.get().isSupplementalCandidate))) {
           displayedBranchLength = 1;
           if (!Lizzie.config.autoReplayBranch) return;
         }
@@ -1542,12 +1545,14 @@ public class FloatBoardRenderer {
               Lizzie.frame.floatBoard != null
                   && Lizzie.frame.floatBoard.isMouseOver(coords[0], coords[1]);
           boolean lackOfPlayouts = percentPlayouts <= Lizzie.config.minPlayoutRatioForStats
-              && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
+              && !((Lizzie.config.analyzeSgfBranches && move.isSgfBranch)
+                      || (Lizzie.config.supplementCandidates && move.isSupplementalCandidate));
           boolean outOfOrder =
               Lizzie.config.limitMaxSuggestion > 0
                   && move.order + 1 > Lizzie.config.limitMaxSuggestion
                   && !move.lastTimeUnlimited
-                  && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
+                  && !((Lizzie.config.analyzeSgfBranches && move.isSgfBranch)
+                      || (Lizzie.config.supplementCandidates && move.isSupplementalCandidate));
           boolean hasBackground =
               Board.getIndex(coords[0], coords[1]) < hasDrawBackground.length
                   ? hasDrawBackground[Board.getIndex(coords[0], coords[1])]
@@ -1569,12 +1574,11 @@ public class FloatBoardRenderer {
           float saturation = 1.0f;
           float brightness = 0.85f;
           float alpha;
-          float alphaRatio = max(0, (float) log(percentPlayouts) / alphaFactor + 1);
+          float alphaRatio = Math.min(1, SuggestionStyle.alpha(move.playouts, maxPlayouts) / 255f);
           alpha = minAlpha + (maxAlpha - minAlpha) * alphaRatio;
 
           Color hsbColor = Color.getHSBColor(hue, saturation, brightness);
-          Color color =
-              new Color(hsbColor.getRed(), hsbColor.getGreen(), hsbColor.getBlue(), (int) alpha);
+          Color color = SuggestionStyle.color(move, bestMoves, maxPlayouts);
           boolean needSkipNumbers = (outOfOrder || lackOfPlayouts) && !isMouseOver;
           if (!branchOpt.isPresent() || isMouseOver) {
             if (Lizzie.config.showSuggestionOrder && move.order == 0) {
@@ -1676,6 +1680,38 @@ public class FloatBoardRenderer {
             boolean showWinrate = Lizzie.config.showWinrateInSuggestion;
             boolean showPlayouts = Lizzie.config.showPlayoutsInSuggestion;
             boolean showScoreLead = move.isKataData && Lizzie.config.showScoremeanInSuggestion;
+            if (Lizzie.config.showMoveValue && move.isKataData) {
+              java.util.List<String> valueRows = new java.util.ArrayList<>();
+              java.util.Map<Integer, String> orderedRows = new java.util.TreeMap<>();
+              if (showWinrate) orderedRows.put(Lizzie.config.suggestionInfoWinrate,
+                  String.format(Locale.ENGLISH, "%.1f", roundedWinrate));
+              if (showPlayouts) orderedRows.put(Lizzie.config.suggestionInfoPlayouts,
+                  Utils.getPlayoutsString(move.playouts));
+              if (showScoreLead) {
+                double score = move.scoreMean;
+                double reference = move.hasOrdinaryReference ? move.ordinaryScoreMean : bestMoves.get(0).scoreMean;
+                if (Lizzie.config.showScoreAsDiff) score -= reference;
+                else {
+                  if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+                    score = Lizzie.board.getData().blackToPlay ? score + Lizzie.board.getData().getKomi()
+                        : -score + Lizzie.board.getData().getKomi();
+                  } else if (Lizzie.config.winrateAlwaysBlack && !Lizzie.board.getData().blackToPlay)
+                    score = -score;
+                }
+                orderedRows.put(Lizzie.config.suggestionInfoScoreLead,
+                    String.format(Locale.ENGLISH, "%+.1f", score));
+              }
+              valueRows.addAll(orderedRows.values());
+              valueRows.add(MoveValue.candidateText(move, Lizzie.board.getData()));
+              float valueFont = squareWidth * (valueRows.size() >= 4 ? 0.27f : 0.32f);
+              for (int row = 0; row < valueRows.size(); row++) {
+                int rowY = (int) Math.round(suggestionY +
+                    (row - (valueRows.size() - 1) / 2.0) * squareWidth * 0.27);
+                drawStringFor3row(g, suggestionX, rowY, LizzieFrame.winrateFont, Font.PLAIN,
+                    valueRows.get(row), valueFont, stoneRadius * 1.8);
+              }
+              continue;
+            }
             boolean canShowMaxColor = Lizzie.config.showSuggestionMaxRed;
             if (isMouseOver && displayedBranchLength != 1) canShowMaxColor = false;
             Color oriColor = g.getColor();
@@ -2127,7 +2163,8 @@ public class FloatBoardRenderer {
               Lizzie.config.limitMaxSuggestion > 0
                   && move.order + 1 > Lizzie.config.limitMaxSuggestion
                   && !move.lastTimeUnlimited
-                  && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
+                  && !((Lizzie.config.analyzeSgfBranches && move.isSgfBranch)
+                      || (Lizzie.config.supplementCandidates && move.isSupplementalCandidate));
 
           if (!outOfOrder && move.order < 25) {
             continue;
@@ -2148,12 +2185,11 @@ public class FloatBoardRenderer {
           float saturation = 1.0f;
           float brightness = 0.85f;
           float alpha;
-          float alphaRatio = max(0, (float) log(percentPlayouts) / alphaFactor + 1);
+          float alphaRatio = Math.min(1, SuggestionStyle.alpha(move.playouts, maxPlayouts) / 255f);
           alpha = minAlpha + (maxAlpha - minAlpha) * alphaRatio;
 
           Color hsbColor = Color.getHSBColor(hue, saturation, brightness);
-          Color color =
-              new Color(hsbColor.getRed(), hsbColor.getGreen(), hsbColor.getBlue(), (int) alpha);
+          Color color = SuggestionStyle.color(move, bestMoves, maxPlayouts);
           if (!branchOpt.isPresent()) {
             //            if (isFancyBoard) {
             //              g.setPaint(paint);

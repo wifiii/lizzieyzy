@@ -7,6 +7,9 @@ import featurecat.lizzie.gui.LizzieFrame;
 import java.util.*;
 
 public class BoardData {
+  public volatile int passAnalysisVisits;
+  public volatile double passAnalysisScore = Double.NaN;
+  public String passAnalysisEngine = "";
   public int moveNumber;
   public int moveMNNumber;
   public Optional<int[]> lastMove;
@@ -217,6 +220,7 @@ public class BoardData {
       boolean isFromLeelaz,
       int totalplayouts,
       ArrayList<Double> estimateArray) {
+    featurecat.lizzie.analysis.SuggestionStyle.setReference(moves);
     if (Lizzie.config.enableLizzieCache
         && !Lizzie.config.isAutoAna
         && !EngineManager.isEngineGame) {
@@ -321,6 +325,7 @@ public class BoardData {
       boolean isFromLeelaz,
       int totalplayouts,
       ArrayList<Double> estimateArray) {
+    featurecat.lizzie.analysis.SuggestionStyle.setReference(moves);
     if (Lizzie.config.enableLizzieCache && !Lizzie.config.isAutoAna) {
       if (!(totalplayouts > playouts2
           || isChanged2

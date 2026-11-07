@@ -44,6 +44,9 @@ public class BranchAnalysisIntegrationTest {
 
   @Before public void setupPosition() throws Exception {
     engine = Lizzie.leelaz;
+    Lizzie.config.supplementCandidates = false;
+    Lizzie.config.analyzePassValue = false;
+    Lizzie.config.showMoveValue = false;
     Lizzie.config.analyzeSgfBranches = false;
     engine.isKatago = false;
     SGFParser.loadFromString("(;GM[1]FF[4]SZ[19](;B[aa])(;B[bb])(;B[]))");
@@ -157,7 +160,222 @@ public class BranchAnalysisIntegrationTest {
       assertFalse("Deleted branch result leaked", "A19".equals(move.coordinate));
   }
 
+  @Test public void candidateTopUpWaitsForOrdinaryLimitAndRestoresOmittedMoves() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.supplementCandidates = true;
+    Lizzie.config.candidateMinVisits = 200;
+    Lizzie.config.limitPlayout = true;
+    Lizzie.config.limitPlayouts = 10000;
+    info(move("Q16", 80, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
+    assertFalse(commands.toString("UTF-8").contains("allow"));
+    assertEquals(1, find("T1").playouts);
+    commands.reset();
+    info(move("Q16", 10000, 0.6));
+    assertTrue(commands.toString("UTF-8").contains("allow B T1 1"));
+    assertTrue(engine.isPondering());
+    info(move("T1", 200, 0.01));
+    assertFalse(engine.isPondering());
+    assertEquals(200, find("T1").playouts);
+    assertEquals(10000, engine.getBestMovesPlayouts());
+    assertTrue(commands.toString("UTF-8").contains("stop"));
+  }
+
+  @Test public void generalTopUpRunsAfterBranchMinimumAndPrimaryLimit() throws Exception {
+    Lizzie.config.supplementCandidates = true;
+    Lizzie.config.candidateMinVisits = 200;
+    Lizzie.config.limitPlayout = true;
+    Lizzie.config.limitPlayouts = 10000;
+    info(move("Q16", 5000, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
+    assertFalse(commands.toString("UTF-8").contains("allow"));
+    info(move("Q16", 10000, 0.6));
+    info(move("A19", 1000, 0.5));
+    info(move("B18", 1000, 0.4));
+    info(move("pass", 1000, 0.3));
+    assertTrue(commands.toString("UTF-8").contains("allow B T1 1"));
+    info(move("T1", 200, 0.01));
+    assertFalse(engine.isPondering());
+  }
+
+  @Test public void manualPauseCancelsCandidateTopUp() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.supplementCandidates = true;
+    Lizzie.config.limitPlayout = true;
+    Lizzie.config.limitPlayouts = 100;
+    info(move("Q16", 100, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
+    engine.togglePonder();
+    commands.reset();
+    line("info " + move("T1", 200, 0.01));
+    assertFalse(engine.isPondering());
+    assertFalse(commands.toString("UTF-8").contains("allow"));
+    assertEquals(1, find("T1").playouts);
+  }
+
+  @Test public void passSearchAlternatesAndDoesNotCorruptNormalStatistics() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.analyzePassValue = true;
+    Lizzie.config.passValueVisits = 1000;
+    set("searchSliceStarted", 0L);
+    info(move("Q16", 5000, 0.6).replace("scoreMean 2", "scoreMean 5"));
+    assertTrue(commands.toString("UTF-8").contains("allow B pass 1"));
+    set("searchSliceStarted", 0L);
+    set("passSliceStarted", System.currentTimeMillis() - 600);
+    info(move("pass", 250, 0.1).replace("scoreMean 2", "scoreMean -6.3"));
+    assertEquals(250, Lizzie.board.getData().passAnalysisVisits);
+    assertEquals(5.0, Lizzie.board.getData().scoreMean, 0);
+    assertEquals(11.3, MoveValue.nextValue(Lizzie.board.getData().scoreMean,
+        Lizzie.board.getData().passAnalysisScore), 0.0001);
+    assertTrue(engine.isPondering());
+    assertFalse(engine.getBestMoves().get(0).coordinate.equals("pass"));
+    set("searchSliceStarted", 0L);
+    info(move("Q16", 6000, 0.6).replace("scoreMean 2", "scoreMean 6"));
+    info(move("pass", 1000, 0.1).replace("scoreMean 2", "scoreMean -5.3"));
+    assertEquals(1000, Lizzie.board.getData().passAnalysisVisits);
+    assertEquals(6.0, Lizzie.board.getData().scoreMean, 0);
+    assertTrue(MoveValue.comment(Lizzie.board.getData()).contains("+11.3"));
+    MoveData candidate = MoveData.fromInfoKatago(move("D4", 200, 0.5).replace("scoreMean 2", "scoreMean 4"));
+    assertEquals("+9.3", MoveValue.candidateText(candidate, Lizzie.board.getData()));
+  }
+
+  @Test public void passProgressIsNotReusedAtAnotherPosition() throws Exception {
+    passSearchAlternatesAndDoesNotCorruptNormalStatistics();
+    assertTrue(Lizzie.board.nextMove(false));
+    assertFalse(MoveValue.available(Lizzie.board.getData()));
+  }
+
+  @Test public void whiteToMoveUsesTheSameValueSignEvenInBlackWinrateDisplay() throws Exception {
+    assertTrue(Lizzie.board.nextMove(false));
+    assertFalse(Lizzie.board.getData().blackToPlay);
+    boolean oldPerspective = Lizzie.config.winrateAlwaysBlack;
+    try {
+      Lizzie.config.winrateAlwaysBlack = true;
+      Lizzie.config.analyzeSgfBranches = false;
+      Lizzie.config.analyzePassValue = true;
+      Lizzie.config.passValueVisits = 1000;
+      engine.refreshSgfBranchAnalysis();
+      set("searchSliceStarted", 0L);
+      commands.reset();
+      info(move("Q16", 5000, 0.6).replace("scoreMean 2", "scoreMean 5"));
+      assertTrue(commands.toString("UTF-8").contains("allow W pass 1"));
+      info(move("pass", 1000, 0.1).replace("scoreMean 2", "scoreMean -6.3"));
+      assertEquals("+11.3", MoveValue.candidateText(find("Q16"), Lizzie.board.getData()));
+    } finally { Lizzie.config.winrateAlwaysBlack = oldPerspective; }
+  }
+
+  @Test public void engineParameterChangeInvalidatesCachedPassValue() throws Exception {
+    passSearchAlternatesAndDoesNotCorruptNormalStatistics();
+    assertTrue(MoveValue.available(Lizzie.board.getData()));
+    engine.sendCommand("kata-set-param analysisWideRootNoise 0.05");
+    assertFalse(MoveValue.available(Lizzie.board.getData()));
+  }
+
+  @Test public void highVisitBadCandidateUsesThemeQualityNotVisitColor() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.limitMaxSuggestion = 10;
+    java.util.Map<Double, java.awt.Color> colors = new java.util.HashMap<>();
+    colors.put(-24.0, java.awt.Color.MAGENTA);
+    colors.put(-12.0, java.awt.Color.RED);
+    colors.put(3.0, java.awt.Color.GREEN);
+    Lizzie.config.blunderWinrateThresholds = java.util.Optional.of(Arrays.asList(3.0, -24.0, -12.0));
+    Lizzie.config.blunderNodeColors = java.util.Optional.of(colors);
+    info(move("Q16", 8600, 0.533).replace("scoreMean 2", "scoreMean 0")
+        + " info " + move("T1", 11000, 0.005).replace("order 0", "order 1").replace("scoreMean 2", "scoreMean -14.9"));
+    java.awt.Color color = SuggestionStyle.color(find("T1"), engine.getBestMoves(), 11000);
+    assertEquals(java.awt.Color.MAGENTA.getRGB(), color.getRGB());
+    assertEquals(255, color.getAlpha());
+  }
+
+  @Test public void scoreLossStillAffectsColorWhenWinrateIsSaturated() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.limitMaxSuggestion = 10;
+    java.util.Map<Double, java.awt.Color> colors = new java.util.HashMap<>();
+    colors.put(-12.0, java.awt.Color.RED);
+    colors.put(3.0, java.awt.Color.GREEN);
+    Lizzie.config.blunderWinrateThresholds = java.util.Optional.of(Arrays.asList(-12.0, 3.0));
+    Lizzie.config.blunderNodeColors = java.util.Optional.of(colors);
+    Lizzie.config.useScoreDiffInVariationTree = true;
+    Lizzie.config.scoreDiffInVariationTreeFactor = 0.5;
+    info(move("Q16", 5000, 0.99).replace("scoreMean 2", "scoreMean 10")
+        + " info " + move("T1", 1000, 0.989).replace("order 0", "order 1").replace("scoreMean 2", "scoreMean 4"));
+    java.awt.Color color = SuggestionStyle.color(find("T1"), engine.getBestMoves(), 5000);
+    assertEquals(java.awt.Color.RED.getRed(), color.getRed());
+    assertEquals(0, color.getGreen());
+    Lizzie.config.useScoreDiffInVariationTree = false;
+    color = SuggestionStyle.color(find("T1"), engine.getBestMoves(), 5000);
+    assertEquals(java.awt.Color.GREEN.getGreen(), color.getGreen());
+  }
+
+  @Test public void valueRowsAndCommentRenderWithoutEditingSgfComment() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.limitMaxSuggestion = 10;
+    info(move("Q16", 8600, 0.533).replace("scoreMean 2", "scoreMean 0")
+        + " info " + move("T1", 11000, 0.005).replace("order 0", "order 1").replace("scoreMean 2", "scoreMean -14.9"));
+    Lizzie.config.analyzePassValue = true;
+    Lizzie.config.showMoveValue = true;
+    Lizzie.config.showWinrateInSuggestion = true;
+    Lizzie.config.showPlayoutsInSuggestion = true;
+    Lizzie.config.showScoremeanInSuggestion = true;
+    Lizzie.config.showComment = true;
+    java.util.Map<Double, java.awt.Color> colors = new java.util.HashMap<>();
+    colors.put(-24.0, java.awt.Color.MAGENTA);
+    colors.put(3.0, java.awt.Color.GREEN);
+    Lizzie.config.blunderWinrateThresholds = java.util.Optional.of(Arrays.asList(-24.0, 3.0));
+    Lizzie.config.blunderNodeColors = java.util.Optional.of(colors);
+    Lizzie.board.getData().passAnalysisScore = -11.3;
+    Lizzie.board.getData().passAnalysisVisits = 1000;
+    Lizzie.board.getData().passAnalysisEngine = engine.analysisContext();
+    String originalComment = Lizzie.board.getData().comment;
+    boolean appendedBefore = Lizzie.config.appendWinrateToComment;
+    Lizzie.config.appendWinrateToComment = false;
+    boolean wasEmpty = EngineManager.isEmpty;
+    EngineManager.isEmpty = false;
+    engine.isLoaded = true;
+    try {
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        try {
+          Lizzie.frame.setSize(1280, 900);
+          Lizzie.frame.validate();
+          Lizzie.frame.refresh(1);
+          Method comment = Lizzie.frame.getClass().getDeclaredMethod("setComment", boolean.class);
+          comment.setAccessible(true);
+          comment.invoke(Lizzie.frame, false);
+          Field area = Lizzie.frame.getClass().getDeclaredField("commentTextArea");
+          area.setAccessible(true);
+          Field pane = Lizzie.frame.getClass().getDeclaredField("commentTextPane");
+          pane.setAccessible(true);
+          String displayed = ((javax.swing.JLabel) area.get(Lizzie.frame)).getText()
+              + ((javax.swing.JTextPane) pane.get(Lizzie.frame)).getText();
+          assertTrue(displayed.contains("+11.3"));
+          java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(1280, 900,
+              java.awt.image.BufferedImage.TYPE_INT_RGB);
+          java.awt.Graphics2D graphics = image.createGraphics();
+          Lizzie.frame.paint(graphics);
+          graphics.dispose();
+          javax.imageio.ImageIO.write(image, "png", new File("supplemental-value-ui.png"));
+          int purplePixels = 0;
+          for (int x = 0; x < image.getWidth(); x++) for (int y = 0; y < image.getHeight(); y++) {
+            java.awt.Color color = new java.awt.Color(image.getRGB(x, y));
+            if (color.getRed() > 220 && color.getBlue() > 220 && color.getGreen() < 30) purplePixels++;
+          }
+          assertTrue("Bad candidate was not painted with theme's purple color", purplePixels > 20);
+        } catch (Exception error) { throw new RuntimeException(error); }
+      });
+      assertEquals(originalComment, Lizzie.board.getData().comment);
+      assertEquals("-3.6", MoveValue.candidateText(find("T1"), Lizzie.board.getData()));
+    } finally {
+      EngineManager.isEmpty = wasEmpty;
+      Lizzie.config.appendWinrateToComment = appendedBefore;
+    }
+  }
+
   @Test public void realKataGoMeetsEveryBranchMinimum() throws Exception {
+    runRealKataGo(false);
+  }
+
+  @Test public void realKataGoCompletesNormalPassBranchesAndCandidates() throws Exception {
+    runRealKataGo(true);
+  }
+
+  private void runRealKataGo(boolean extended) throws Exception {
     String binary = System.getProperty("katago.binary");
     Assume.assumeTrue(binary != null);
     Process process = new ProcessBuilder(binary, "gtp", "-model",
@@ -173,6 +391,14 @@ public class BranchAnalysisIntegrationTest {
       set("currentCmdNum", 0);
       engine.isLoaded = true;
       Lizzie.config.sgfBranchMinVisits = 8;
+      if (extended) {
+        Lizzie.config.analyzePassValue = true;
+        Lizzie.config.passValueVisits = 8;
+        Lizzie.config.supplementCandidates = true;
+        Lizzie.config.candidateMinVisits = 2;
+        Lizzie.config.limitPlayout = true;
+        Lizzie.config.limitPlayouts = 20;
+      }
       Method read = Leelaz.class.getDeclaredMethod("read");
       read.setAccessible(true);
       reader = new Thread(() -> {
@@ -191,12 +417,22 @@ public class BranchAnalysisIntegrationTest {
             for (MoveData move : moves)
               if (target.equalsIgnoreCase(move.coordinate) && move.playouts >= 8) met++;
           }
-          if (met == 3) { complete = true; break; }
+          boolean allCandidates = true;
+          if (extended) {
+            for (MoveData move : moves) if (!move.coordinate.equalsIgnoreCase("pass")
+                && move.playouts < 2) allCandidates = false;
+          }
+          if (met == 3 && (!extended || (allCandidates && !engine.isPondering()
+              && Lizzie.board.getData().passAnalysisVisits >= 8))) {
+            complete = true; break;
+          }
         }
         Thread.sleep(100);
       }
       assertTrue("Real KataGo did not complete all SGF branches; inspect katago-test-stderr.log", complete);
-      System.out.println("Real KataGo: A19, B18 and pass each reached >=8 visits");
+      System.out.println(extended
+          ? "Real KataGo: normal limit, pass value, all branches and observed candidates completed"
+          : "Real KataGo: A19, B18 and pass each reached >=8 visits");
       engine.sendCommand("stop");
     } finally {
       process.destroy();

@@ -942,6 +942,19 @@ public class Menu extends JMenuBar {
           }
         });
     Suggestions.add(suggestion3);
+    final JFontCheckBoxMenuItem suggestionValue =
+        new JFontCheckBoxMenuItem(resourceBundle.getString("MoveValue.menu"));
+    suggestionValue.addActionListener(e -> {
+      Lizzie.config.showMoveValue = suggestionValue.isSelected();
+      if (Lizzie.config.showMoveValue) Lizzie.config.analyzePassValue = true;
+      SupplementalSettings.saveAndApply();
+    });
+    Suggestions.add(suggestionValue);
+    Suggestions.addMenuListener(new MenuListener() {
+      public void menuSelected(MenuEvent e) { suggestionValue.setSelected(Lizzie.config.showMoveValue); }
+      public void menuDeselected(MenuEvent e) {}
+      public void menuCanceled(MenuEvent e) {}
+    });
     Suggestions.addSeparator();
 
     final JFontCheckBoxMenuItem showScoreAsDiff =
@@ -3169,6 +3182,14 @@ public class Menu extends JMenuBar {
       Lizzie.frame.refresh(1);
     });
     analyzeMenu.add(sgfBranchSettings);
+    JFontMenuItem candidateSettings =
+        new JFontMenuItem(resourceBundle.getString("Supplemental.candidates.menu"));
+    candidateSettings.addActionListener(e -> SupplementalSettings.show());
+    analyzeMenu.add(candidateSettings);
+    JFontMenuItem passValueSettings =
+        new JFontMenuItem(resourceBundle.getString("Supplemental.pass.menu"));
+    passValueSettings.addActionListener(e -> SupplementalSettings.show());
+    analyzeMenu.add(passValueSettings);
 
     final JFontMenuItem hawkEye2 =
         new JFontMenuItem(resourceBundle.getString("Menu.hawkEye")); // ("超级鹰眼(T)");

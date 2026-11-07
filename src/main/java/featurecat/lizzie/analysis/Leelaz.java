@@ -66,6 +66,11 @@ public class Leelaz {
   private final ThreadLocal<Boolean> branchCommand = new ThreadLocal<>();
   private List<MoveData> branchOrdinary = new ArrayList<>();
   private boolean branchSearchRejected;
+  private String supplementalKind = "";
+  private boolean primaryLimitReached;
+  private long searchSliceStarted;
+  private long passSliceStarted;
+  private volatile long analysisRevision;
   private List<MoveData> bestMoves;
   private List<MoveData> bestMovesPrevious;
   // private List<MoveData> bestMovesTemp;
@@ -290,6 +295,7 @@ public class Leelaz {
   }
 
   public void startEngine(int index) throws IOException {
+    analysisRevision++;
     if (engineCommand.trim().isEmpty()) {
       Utils.showMsg(Lizzie.resourceBundle.getString("EngineFaied.empty"));
       return;
@@ -657,7 +663,7 @@ public class Leelaz {
         //			break;
       }
     }
-    if (canAnalyzeSgfBranches())
+    if (canUseSupplemental())
       branchAnalysis.normal(Lizzie.board.getHistory().getCurrentHistoryNode(), bestMoves);
     currentTotalPlayouts = MoveData.getPlayouts(bestMoves);
     ArrayList<Double> estimateArray = new ArrayList<Double>();
@@ -1143,9 +1149,11 @@ public class Leelaz {
     synchronized (this) {
       if (line.startsWith("?") && branchAnalysis.isActive()) {
         branchSearchRejected = true;
-        branchAnalysis.clear();
-        System.err.println("SGF branch analysis rejected by engine: " + line);
-        sendBranchCommand("kata-analyze " + maybeAddPlayer() + getInterval() + addKataTag());
+        branchAnalysis.start(null);
+        supplementalKind = "";
+        System.err.println("Supplemental analysis rejected by engine: " + line);
+        if (primaryLimitReached) finishSupplemental();
+        else sendBranchCommand(normalAnalyzeCommand());
       }
       if (line.startsWith("info")) {
         if ((isResponseUpToDate())) {
@@ -1180,11 +1188,17 @@ public class Leelaz {
           } else {
             this.bestMoves = parseInfo(line.substring(5));
           }
-          if (canAnalyzeSgfBranches() && !this.bestMoves.isEmpty()) {
+          if (canUseSupplemental() && !this.bestMoves.isEmpty()) {
             branchOrdinary = new ArrayList<>(Lizzie.board.getData().bestMoves);
+            updatePassValue(branchAnalysis.best("pass"));
             showSgfBranchResults();
-            if (startNextSgfBranch()) {
+            if (normalLimitReached()) primaryLimitReached = true;
+            if (startNextSupplemental()) {
               Lizzie.frame.refresh(1);
+              return;
+            }
+            if (primaryLimitReached) {
+              finishSupplemental();
               return;
             }
           }
@@ -1207,7 +1221,8 @@ public class Leelaz {
           if (!Lizzie.frame.isPlayingAgainstLeelaz
               && !Lizzie.frame.isAnaPlayingAgainstLeelaz
               && !EngineManager.isEngineGame
-              && !Lizzie.config.isAutoAna) {
+              && !Lizzie.config.isAutoAna
+              && !canUseSupplemental()) {
             if (!outOfPlayoutsLimit
                 && ((Lizzie.config.limitPlayout
                         && getBestMovesPlayouts() > Lizzie.config.limitPlayouts)
@@ -2520,9 +2535,15 @@ public class Leelaz {
    * @param command a GTP command containing no newline characters
    */
   public void sendCommand(String command) {
+    if (command.startsWith("komi ") || command.startsWith("kata-set-param ")
+        || command.startsWith("kata-set-rules ") || command.startsWith("kata-set-rule "))
+      analysisRevision++;
     if (!Boolean.TRUE.equals(branchCommand.get())) {
       branchAnalysis.clear();
       branchSearchRejected = false;
+      supplementalKind = "";
+      primaryLimitReached = false;
+      searchSliceStarted = System.currentTimeMillis();
     }
     if (Lizzie.config.isDoubleEngineMode()) {
       if ((command.startsWith("heat") || command.startsWith("kata-raw"))
@@ -2595,6 +2616,8 @@ public class Leelaz {
   public void sendCommandNoLeelaz2(String command) {
     branchAnalysis.clear();
     branchSearchRejected = false;
+    supplementalKind = "";
+    primaryLimitReached = false;
     if (Lizzie.config.isDoubleEngineMode()) {
       if ((command.startsWith("heat") || command.startsWith("kata-raw"))
           && !this.isKatago
@@ -2982,8 +3005,9 @@ public class Leelaz {
     }
   }
 
-  private boolean canAnalyzeSgfBranches() {
-    return Lizzie.config.analyzeSgfBranches && isKatago && this == Lizzie.leelaz
+  private boolean canUseSupplemental() {
+    return (Lizzie.config.analyzeSgfBranches || Lizzie.config.supplementCandidates
+            || Lizzie.config.analyzePassValue) && isKatago && this == Lizzie.leelaz
         && isPondering && !noAnalyze && !isheatmap && !branchSearchRejected
         && !Lizzie.config.isDoubleEngineMode() && !EngineManager.isEngineGame
         && !Lizzie.config.isAutoAna && !Lizzie.frame.isPlayingAgainstLeelaz
@@ -2994,6 +3018,7 @@ public class Leelaz {
 
   private java.util.Set<String> sgfBranchTargets() {
     java.util.Set<String> targets = new java.util.LinkedHashSet<>();
+    if (!Lizzie.config.analyzeSgfBranches) return targets;
     BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
     Stone color = node.getData().blackToPlay ? Stone.BLACK : Stone.WHITE;
     for (BoardHistoryNode child : new ArrayList<>(node.getVariations())) {
@@ -3015,58 +3040,149 @@ public class Leelaz {
     finally { branchCommand.remove(); }
   }
 
-  private boolean startNextSgfBranch() {
-    if (!canAnalyzeSgfBranches()) return false;
-    String target = branchAnalysis.next(sgfBranchTargets(), Lizzie.config.sgfBranchMinVisits);
-    if (target == null) return false;
-    sendBranchCommand("kata-analyze " + maybeAddPlayer() + getInterval()
-        + " allow " + (Lizzie.board.getData().blackToPlay ? "B" : "W")
-        + " " + target + " 1" + addKataTag());
-    return true;
+  private String normalAnalyzeCommand() {
+    return "kata-analyze " + maybeAddPlayer() + getInterval() + addKataTag();
+  }
+
+  private void startRestricted(String kind, String target) {
+    supplementalKind = kind;
+    branchAnalysis.start(target);
+    searchSliceStarted = System.currentTimeMillis();
+    if (kind.equals("pass")) passSliceStarted = searchSliceStarted;
+    sendBranchCommand(normalAnalyzeCommand() + " allow "
+        + (Lizzie.board.getData().blackToPlay ? "B" : "W") + " " + target + " 1");
+  }
+
+  private boolean normalLimitReached() {
+    return (Lizzie.config.limitPlayout && !outOfPlayoutsLimit
+            && currentTotalPlayouts >= Lizzie.config.limitPlayouts)
+        || (Lizzie.config.limitTime
+            && System.currentTimeMillis() - startPonderTime >= Lizzie.config.maxAnalyzeTimeMillis)
+        || (Lizzie.config.stopAtEmptyBoard && Lizzie.board.getHistory().noStoneBoard());
+  }
+
+  public String analysisContext() {
+    return System.identityHashCode(this) + "|" + analysisRevision + "|" + engineCommand
+        + "|" + pda + "|" + Lizzie.board.getHistory().getGameInfo().getKomi()
+        + "|" + Lizzie.config.currentKataGoRules;
+  }
+
+  private boolean passNeedsWork() {
+    BoardData data = Lizzie.board.getData();
+    return Lizzie.config.analyzePassValue
+        && (!analysisContext().equals(data.passAnalysisEngine)
+            || data.passAnalysisVisits < Lizzie.config.passValueVisits);
+  }
+
+  private void updatePassValue(MoveData pass) {
+    if (pass == null || !pass.coordinate.equalsIgnoreCase("pass") || !pass.isKataData) return;
+    BoardData data = Lizzie.board.getData();
+    if (!analysisContext().equals(data.passAnalysisEngine)
+        || pass.playouts >= data.passAnalysisVisits) {
+      data.passAnalysisEngine = analysisContext();
+      data.passAnalysisScore = pass.scoreMean;
+      data.passAnalysisVisits = pass.playouts;
+    }
+  }
+
+  private boolean startNextSupplemental() {
+    if (!canUseSupplemental()) return false;
+    if (passNeedsWork() && (primaryLimitReached
+        || System.currentTimeMillis() - searchSliceStarted >= 500)) {
+      startRestricted("pass", "pass");
+      return true;
+    }
+    String target = null;
+    if (primaryLimitReached || (!Lizzie.config.limitPlayout && !Lizzie.config.limitTime)) {
+      target = branchAnalysis.next(sgfBranchTargets(), Lizzie.config.sgfBranchMinVisits);
+      if (target != null) { startRestricted("branch", target); return true; }
+    }
+    if (primaryLimitReached && Lizzie.config.supplementCandidates) {
+      target = branchAnalysis.next(branchAnalysis.observedCoordinates(), Lizzie.config.candidateMinVisits);
+      if (target != null) { startRestricted("candidate", target); return true; }
+    }
+    supplementalKind = "";
+    return false;
+  }
+
+  private void finishSupplemental() {
+    branchAnalysis.start(null);
+    supplementalKind = "";
+    stopByLimit = true;
+    stopByPlayouts = Lizzie.config.limitPlayout;
+    isPondering = false;
+    sendBranchCommand("stop");
+    LizzieFrame.menu.toggleEngineMenuStatus(false, false);
+    Lizzie.frame.refresh(1);
   }
 
   private void showSgfBranchResults() {
-    bestMoves = branchAnalysis.display(branchOrdinary, sgfBranchTargets());
-    // Deliberately bypass root winrate, score, ownership and total-visit updates.
+    bestMoves = branchAnalysis.display(branchOrdinary, sgfBranchTargets(),
+        Lizzie.config.supplementCandidates);
+    // Restricted-search values never overwrite root winrate, score or total visits.
     Lizzie.board.getData().bestMoves = new ArrayList<>(bestMoves);
-    java.util.Set<String> targets = sgfBranchTargets();
+    java.util.Set<String> visible = new java.util.HashSet<>();
+    for (MoveData move : bestMoves) visible.add(move.coordinate);
     List<MoveData> outOfRange = Lizzie.board.getData().bestMovesOutOfRange == null
         ? new ArrayList<>() : new ArrayList<>(Lizzie.board.getData().bestMovesOutOfRange);
-    outOfRange.removeIf(move -> targets.contains(move.coordinate));
+    outOfRange.removeIf(move -> visible.contains(move.coordinate));
     Lizzie.board.getData().bestMovesOutOfRange = outOfRange;
   }
 
   private boolean handleSgfBranchInfo(String line) {
     if (!branchAnalysis.isActive()) return false;
-    if (!canAnalyzeSgfBranches()
+    if (!canUseSupplemental()
         || !branchAnalysis.isPosition(Lizzie.board.getHistory().getCurrentHistoryNode())) {
       branchAnalysis.clear();
+      supplementalKind = "";
       if (isPondering) ponder();
       return true;
     }
-    if (!sgfBranchTargets().contains(branchAnalysis.activeMove())) {
+    String kind = supplementalKind;
+    String target = branchAnalysis.activeMove();
+    if (kind.equals("branch") && !sgfBranchTargets().contains(target)) {
+      branchAnalysis.start(null);
+      if (!startNextSupplemental()) {
+        if (primaryLimitReached) finishSupplemental();
+        else sendBranchCommand(normalAnalyzeCommand());
+      }
       showSgfBranchResults();
-      if (!startNextSgfBranch())
-        sendBranchCommand("kata-analyze " + maybeAddPlayer() + getInterval() + addKataTag());
       return true;
     }
     List<MoveData> moves = new ArrayList<>();
     for (String info : line.split("ownership")[0].split(" info ")) {
       if (!info.trim().isEmpty()) moves.add(MoveData.fromInfoKatago(info));
     }
-    boolean complete = branchAnalysis.accept(moves, Lizzie.config.sgfBranchMinVisits);
+    int minimum = kind.equals("pass") ? Lizzie.config.passValueVisits
+        : kind.equals("candidate") ? Lizzie.config.candidateMinVisits : Lizzie.config.sgfBranchMinVisits;
+    boolean complete = branchAnalysis.accept(moves, minimum);
+    updatePassValue(branchAnalysis.best("pass"));
     showSgfBranchResults();
-    if (complete && !startNextSgfBranch()) {
-      sendBranchCommand("kata-analyze " + maybeAddPlayer() + getInterval() + addKataTag());
+    boolean yieldPass = kind.equals("pass") && !primaryLimitReached
+        && System.currentTimeMillis() - searchSliceStarted >= 500;
+    if (complete || yieldPass) {
+      branchAnalysis.start(null);
+      supplementalKind = "";
+      if (kind.equals("pass")) {
+        startPonderTime += System.currentTimeMillis() - passSliceStarted;
+        searchSliceStarted = System.currentTimeMillis();
+      }
+      if (!yieldPass && startNextSupplemental()) {
+        // Continue the next required search.
+      } else if (primaryLimitReached) finishSupplemental();
+      else sendBranchCommand(normalAnalyzeCommand());
     }
     Lizzie.frame.refresh(1);
     return true;
   }
 
-  /** Apply changed options without enabling analysis if it was paused. */
+  /** Apply changed options without starting a paused analysis session. */
   public synchronized void refreshSgfBranchAnalysis() {
     branchAnalysis.clear();
     branchSearchRejected = false;
+    supplementalKind = "";
+    primaryLimitReached = false;
+    searchSliceStarted = System.currentTimeMillis();
     if (isPondering) ponder();
   }
 

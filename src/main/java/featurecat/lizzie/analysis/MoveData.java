@@ -28,6 +28,10 @@ public class MoveData {
   public boolean isNextMove;
   // A direct SGF continuation, retained even outside the normal suggestion limit.
   public boolean isSgfBranch;
+  public boolean isSupplementalCandidate;
+  public boolean hasOrdinaryReference;
+  public double ordinaryWinrate;
+  public double ordinaryScoreMean;
   public double bestWinrate;
   public double bestScoreMean;
   public boolean lastTimeUnlimited;

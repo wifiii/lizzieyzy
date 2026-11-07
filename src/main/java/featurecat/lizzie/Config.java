@@ -162,6 +162,11 @@ public class Config {
   public boolean appendWinrateToComment = true;
   public int boardPositionProportion = 4;
   public int limitBranchLength = 0;
+  public volatile boolean supplementCandidates = false;
+  public volatile int candidateMinVisits = 200;
+  public volatile boolean analyzePassValue = false;
+  public volatile int passValueVisits = 1000;
+  public volatile boolean showMoveValue = false;
   public volatile boolean analyzeSgfBranches = false;
   public volatile int sgfBranchMinVisits = 1000;
   public int limitMaxSuggestion = 10;
@@ -1211,6 +1216,11 @@ public class Config {
     showPreviousBestmovesOnlyFirstMove =
         uiConfig.optBoolean("show-previous-bestmoves-only-first-move", true);
     showDetailedToolbarMenu = uiConfig.optBoolean("show-detailed-toolbar-menu", false);
+    supplementCandidates = uiConfig.optBoolean("supplement-candidates", false);
+    candidateMinVisits = Math.max(1, uiConfig.optInt("candidate-min-visits", 200));
+    showMoveValue = uiConfig.optBoolean("show-move-value", false);
+    analyzePassValue = uiConfig.optBoolean("analyze-pass-value", false) || showMoveValue;
+    passValueVisits = Math.max(1, uiConfig.optInt("pass-value-visits", 1000));
     analyzeSgfBranches = uiConfig.optBoolean("analyze-sgf-branches", false);
     sgfBranchMinVisits = Math.max(1, uiConfig.optInt("sgf-branch-min-visits", 1000));
     selectAllowMoves = uiConfig.optInt("select-allow-moves", 999);

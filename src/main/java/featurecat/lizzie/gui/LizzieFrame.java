@@ -7027,6 +7027,10 @@ public class LizzieFrame extends JFrame {
                 + Lizzie.resourceBundle.getString("SGFParse.seconds");
       }
     }
+    if (Lizzie.config.analyzePassValue && !isLoadingEngine) {
+      String valueComment = featurecat.lizzie.analysis.MoveValue.comment(Lizzie.board.getData());
+      comment += (comment.isEmpty() ? "" : "\n") + valueComment;
+    }
     if (Lizzie.config.commentFontSize <= 0) {
       int fontSize;
       if (Lizzie.config.isFloatBoardMode()) {
