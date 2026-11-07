@@ -140,7 +140,7 @@ public class SuggestionInfoOrderSettings extends JDialog {
     for (int i = 0; i < (kata ? 4 : 2); i++) {
       if (enabled[i].isSelected()) rows.add(new SuggestionLabels.Row(values[i],
           i == 1 ? LizzieFrame.playoutsFont : LizzieFrame.winrateFont,
-          kata && i < 3 ? Color.RED : Color.BLACK, order[i]));
+          kata ? Color.RED : Color.BLACK, order[i]));
     }
     rows.sort(Comparator.comparingInt(row -> row.order));
     return rows;

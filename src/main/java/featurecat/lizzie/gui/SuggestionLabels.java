@@ -91,6 +91,10 @@ public final class SuggestionLabels {
         }
         baseline = Math.min(baseline, centerY + radius + .4);
         Font fitted = legacyFont(g, row, pointSize, width);
+        // Long bottom-row values can keep a little overhang, with a small size reduction.
+        if (rows.size() == 3 && i == 2
+            && !fits(atBaseline(g, row, centerX, baseline, fitted), centerX, centerY, radius, 0))
+          fitted = fitted.deriveFont(fitted.getSize2D() * .94f);
         double maximumInkHeight = i == 0 ? 2 * radius
             : baseline - result.get(i - 1).bounds.getMaxY() - Math.max(.4, radius * .015);
         result.add(fitBaseline(g, row, centerX, centerY, radius,
@@ -122,13 +126,13 @@ public final class SuggestionLabels {
   private static Placement fitBaseline(Graphics2D g, Row row, double x, double y, double radius,
       double baseline, Font preferred, double maximumInkHeight) {
     Placement result = atBaseline(g, row, x, baseline, preferred);
-    if (result.bounds.getHeight() <= maximumInkHeight && fits(result, x, y, radius + 1, .4)) return result;
+    if (result.bounds.getHeight() <= maximumInkHeight && fits(result, x, y, radius)) return result;
     result = atBaseline(g, row, x, baseline, font(g, row, .1));
     double low = .1, high = preferred.getSize2D();
     for (int attempt = 0; attempt < 18; attempt++) {
       double size = (low + high) / 2;
       Placement candidate = atBaseline(g, row, x, baseline, font(g, row, size));
-      if (candidate.bounds.getHeight() <= maximumInkHeight && fits(candidate, x, y, radius + 1, .4)) {
+      if (candidate.bounds.getHeight() <= maximumInkHeight && fits(candidate, x, y, radius)) {
         result = candidate;
         low = size;
       } else high = size;
@@ -155,11 +159,13 @@ public final class SuggestionLabels {
   }
 
   private static boolean fits(Placement row, double x, double y, double radius) {
-    return fits(row, x, y, radius, Math.max(.7, radius / 30));
+    // Prefer readable text over strict containment at the round corners. The painted circle
+    // has radius + 1; permit a small radial overhang, while row fitting still prevents overlaps.
+    return fits(row, x, y, radius, Math.max(1, radius * .12));
   }
 
-  private static boolean fits(Placement row, double x, double y, double radius, double inset) {
-    double inside = radius - inset;
+  private static boolean fits(Placement row, double x, double y, double radius, double overhang) {
+    double inside = radius + 1 + overhang;
     java.awt.geom.PathIterator path = row.glyphs.getOutline(row.x, row.baseline)
         .getPathIterator(null, .02);
     double[] point = new double[6];
@@ -200,8 +206,8 @@ public final class SuggestionLabels {
         canHighlight && move.scoreMean == maximumScore ? highlight : normal,
         Lizzie.config.suggestionInfoScoreLead));
     if (move.isKataData && Lizzie.config.showMoveValue)
-      rows.add(new Row(MoveValue.candidateText(move, data), winrateFont, normal,
-          Lizzie.config.suggestionInfoValue));
+      rows.add(new Row(MoveValue.candidateText(move, data), winrateFont,
+          canHighlight && move.order == 0 ? highlight : normal, Lizzie.config.suggestionInfoValue));
     rows.sort(Comparator.comparingInt(row -> row.order));
     draw(g, rows, x, y, radius);
   }

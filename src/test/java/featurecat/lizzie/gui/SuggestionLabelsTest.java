@@ -16,7 +16,7 @@ public class SuggestionLabelsTest {
     return rows;
   }
 
-  @Test public void glyphInkFitsTheCircleForAllLineCountsFontsAndSizes() {
+  @Test public void glyphInkStaysWithinTheSmallEdgeAllowanceForAllLineCountsFontsAndSizes() {
     BufferedImage image = new BufferedImage(400, 400, BufferedImage.TYPE_INT_ARGB);
     Graphics2D g = image.createGraphics();
     for (String family : Arrays.asList(Font.SANS_SERIF, Font.SERIF, Font.MONOSPACED)) {
@@ -30,9 +30,10 @@ public class SuggestionLabelsTest {
             for (SuggestionLabels.Placement row : placed) {
               Rectangle2D box = row.bounds;
               java.awt.geom.Area outside = new java.awt.geom.Area(row.glyphs.getOutline(row.x, row.baseline));
+              double boundary = radius + 1 + Math.max(1, radius * .12);
               outside.subtract(new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(
-                  99 - radius, 99 - radius, 2 * radius + 2, 2 * radius + 2)));
-              assertTrue("Actual glyph outline outside circle: " + family + " style=" + style + " r=" + radius + " count=" + count + " text=" + row.row.text, outside.isEmpty());
+                  100 - boundary, 100 - boundary, 2 * boundary, 2 * boundary)));
+              assertTrue("Actual glyph outline exceeded edge allowance: " + family + " style=" + style + " r=" + radius + " count=" + count + " text=" + row.row.text, outside.isEmpty());
               if (previous != null) assertTrue("Adjacent lines overlap", previous.getMaxY() < box.getMinY());
               previous = box;
             }
@@ -43,7 +44,7 @@ public class SuggestionLabelsTest {
     g.dispose();
   }
 
-  @Test public void rasterizedThreeAndFourLineLabelsDoNotLeakAtDisplayScaling() {
+  @Test public void rasterizedLabelsStayWithinEdgeAllowanceAtDisplayScaling() {
     for (double scale : new double[] {1, 1.25, 1.5, 2}) {
       for (int count : new int[] {3, 4}) {
         for (int radius : new int[] {12, 24, 31}) {
@@ -58,8 +59,8 @@ public class SuggestionLabelsTest {
           for (int x = 0; x < image.getWidth(); x++) for (int y = 0; y < image.getHeight(); y++) {
             if ((image.getRGB(x, y) >>> 24) == 0) continue;
             pixels++;
-            assertTrue("Rendered text exceeded circle: scale=" + scale + " radius=" + radius + " count=" + count + " pixel=" + x + "," + y,
-                Math.hypot((x + 0.5) / scale - 60, (y + 0.5) / scale - 60) <= radius + 1);
+            assertTrue("Rendered text exceeded edge allowance: scale=" + scale + " radius=" + radius + " count=" + count + " pixel=" + x + "," + y,
+                Math.hypot((x + 0.5) / scale - 60, (y + 0.5) / scale - 60) <= radius + 2 + Math.max(1, radius * .12));
           }
           assertTrue("Labels disappeared instead of being fitted", pixels > 8);
         }
@@ -139,6 +140,22 @@ public class SuggestionLabelsTest {
       double expected = Math.min(size[i], (int) (100 * width
           / g.getFontMetrics(base).stringWidth(rows.get(i).text)));
       assertEquals(expected, placed.get(i).glyphs.getFont().getSize2D(), .01);
+    }
+    g.dispose();
+  }
+
+  @Test public void longThreeLineValuesAreOnlySlightlySmallerWhenTouchingRoundCorners() throws Exception {
+    Font font = Font.createFont(Font.TRUETYPE_FONT,
+        getClass().getResourceAsStream("/fonts/OpenSans-Semibold.ttf"));
+    Graphics2D g = new BufferedImage(200, 200, BufferedImage.TYPE_INT_ARGB).createGraphics();
+    for (String value : Arrays.asList("+14.4", "+14.5", "+14.6", "+13.9", "+13.8")) {
+      List<SuggestionLabels.Row> rows = Arrays.asList(
+          new SuggestionLabels.Row("62.7", font, Color.BLACK),
+          new SuggestionLabels.Row("-0.2", font, Color.BLACK),
+          new SuggestionLabels.Row(value, font, Color.BLACK));
+      SuggestionLabels.Placement last = SuggestionLabels.layout(g, rows, 100, 100, 30).get(2);
+      assertEquals("Corner fitting shrank the value beyond the small adjustment: " + value,
+          62 * .273 * .94, last.glyphs.getFont().getSize2D(), .01);
     }
     g.dispose();
   }
