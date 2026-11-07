@@ -49,6 +49,17 @@ public final class BranchAnalysis {
     }
   }
 
+  public synchronized List<MoveData> normalMoves() {
+    return new ArrayList<>(normal.values());
+  }
+
+  public synchronized void remember(List<MoveData> moves) {
+    for (MoveData move : moves) {
+      MoveData previous = observed.get(move.coordinate);
+      if (previous == null || previous.playouts < move.playouts) observed.put(move.coordinate, move);
+    }
+  }
+
   public synchronized String next(Set<String> targets, int minimum) {
     active = null;
     for (String target : targets) {
@@ -88,7 +99,7 @@ public final class BranchAnalysis {
     for (MoveData move : ranked) {
       int rank = normalRanks.get(move.coordinate);
       if (maximum > 0 && (rank >= maximum || result.size() >= maximum)) continue;
-      if (move.coordinate.equalsIgnoreCase("pass") || move.playouts <= 0) continue;
+      if (move.coordinate.equalsIgnoreCase("pass") || move.playouts <= 0 || move.isSymmetry) continue;
       if (rank > 0 && (double) move.playouts / Math.max(1, maxVisits) <= minimumRatio) continue;
       result.add(move.coordinate);
     }
@@ -115,7 +126,17 @@ public final class BranchAnalysis {
       Integer rank = normalRanks.get(move.coordinate);
       if (rank == null) continue;
       if (maximum > 0 && (rank >= maximum || result.size() >= maximum)
-          && !move.lastTimeUnlimited && !branches.contains(move.coordinate)) continue;
+          && !move.lastTimeUnlimited && !branches.contains(move.coordinate)
+          && !(move.isSymmetry && move.symmetrySourceOrder >= 0
+              && move.symmetrySourceOrder < maximum)) continue;
+      MoveData cached = best(move.coordinate);
+      if (cached != null && cached.playouts > move.playouts) {
+        MoveData latest = move;
+        move = cached.copy();
+        move.isSymmetry = latest.isSymmetry;
+        move.symmetryOf = latest.symmetryOf;
+        move.symmetrySourceOrder = latest.symmetrySourceOrder;
+      }
       move.order = rank;
       result.add(move);
     }

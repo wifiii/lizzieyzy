@@ -39,7 +39,8 @@ public class BranchAnalysisTest {
     search.next(targets("Q16"), 1000);
     search.normal(node, Arrays.asList(move("D4", 6000, 0)));
     List<MoveData> display = search.display(Arrays.asList(ordinary), targets("Q16"));
-    assertSame(ordinary, display.get(0));
+    assertEquals("D4", display.get(0).coordinate);
+    assertEquals(6000, display.get(0).playouts);
     assertEquals(1, display.get(1).order);
     assertEquals(1000, display.get(1).playouts);
     assertTrue(display.get(1).isSgfBranch);

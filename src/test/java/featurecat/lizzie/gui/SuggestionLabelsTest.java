@@ -29,10 +29,10 @@ public class SuggestionLabelsTest {
             Rectangle2D previous = null;
             for (SuggestionLabels.Placement row : placed) {
               Rectangle2D box = row.bounds;
-              for (double x : new double[] {box.getMinX(), box.getMaxX()})
-                for (double y : new double[] {box.getMinY(), box.getMaxY()})
-                  assertTrue("Text corner outside circle: " + box,
-                      Math.hypot(x - 100, y - 100) < radius);
+              java.awt.geom.Area outside = new java.awt.geom.Area(row.glyphs.getOutline(row.x, row.baseline));
+              outside.subtract(new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(
+                  100 - radius, 100 - radius, 2 * radius, 2 * radius)));
+              assertTrue("Actual glyph outline outside circle", outside.isEmpty());
               if (previous != null) assertTrue("Adjacent lines overlap", previous.getMaxY() < box.getMinY());
               previous = box;
             }
@@ -78,4 +78,36 @@ public class SuggestionLabelsTest {
     assertEquals(original, g.getFont());
     g.dispose();
   }
+  @Test public void ordinaryThreeLineFontSizesMatchTheOriginalReadableSizes() {
+    BufferedImage image = new BufferedImage(200, 200, BufferedImage.TYPE_INT_ARGB);
+    Graphics2D g = image.createGraphics();
+    Font font = new Font(Font.SANS_SERIF, Font.PLAIN, 100);
+    List<SuggestionLabels.Row> rows = Arrays.asList(
+        new SuggestionLabels.Row("38.0", font, Color.BLACK),
+        new SuggestionLabels.Row("3.6k", font, Color.BLACK),
+        new SuggestionLabels.Row("-0.1", font, Color.BLACK));
+    List<SuggestionLabels.Placement> actual = SuggestionLabels.layout(g, rows, 100, 100, 30);
+    double[] heights = {62 * 0.35, 62 * 0.34, 62 * 0.273};
+    double[] widths = {62 * 0.67, 30 * 1.8, 30 * 1.6};
+    for (int i = 0; i < 3; i++) {
+      Font widthFit = font.deriveFont((float) (100 * widths[i]
+          / g.getFontMetrics(font).stringWidth(rows.get(i).text)));
+      double legacy = Math.min(heights[i], widthFit.getSize());
+      assertTrue("Three-line text became smaller than legacy", actual.get(i).glyphs.getFont().getSize2D() >= legacy * 0.95);
+    }
+    g.dispose();
+  }
+
+  @Test public void fourLineLayoutUsesAvailableSpaceInsteadOfFixedSmallSlots() {
+    BufferedImage image = new BufferedImage(200, 200, BufferedImage.TYPE_INT_ARGB);
+    Graphics2D g = image.createGraphics();
+    Font font = new Font(Font.SANS_SERIF, Font.PLAIN, 100);
+    List<SuggestionLabels.Row> rows = new ArrayList<>();
+    for (String text : Arrays.asList("34.8", "3.6k", "-0.1", "+14.7"))
+      rows.add(new SuggestionLabels.Row(text, font, Color.BLACK));
+    for (SuggestionLabels.Placement placed : SuggestionLabels.layout(g, rows, 100, 100, 30))
+      assertTrue("Four-line font is unnecessarily small", placed.glyphs.getFont().getSize2D() >= 15);
+    g.dispose();
+  }
+
 }

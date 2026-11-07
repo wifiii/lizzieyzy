@@ -7,6 +7,64 @@ import featurecat.lizzie.gui.LizzieFrame;
 import java.util.*;
 
 public class BoardData {
+  private String savedAnalysisContext = "";
+  private final Map<String, MoveData> savedAnalysis = new LinkedHashMap<>();
+  private List<MoveData> savedNormalAnalysis = new ArrayList<>();
+  public volatile long analysisCacheGeneration;
+
+  public synchronized boolean hasAnalysisContext(String context) {
+    return savedAnalysisContext.equals(context);
+  }
+
+  public synchronized boolean hasOtherAnalysisContext(String context) {
+    return !savedAnalysisContext.isEmpty() && !savedAnalysisContext.equals(context);
+  }
+
+  private void useAnalysisContext(String context) {
+    if (!savedAnalysisContext.equals(context)) {
+      savedAnalysisContext = context;
+      savedAnalysis.clear();
+      savedNormalAnalysis.clear();
+    }
+  }
+
+  private static List<MoveData> copyMoves(Collection<MoveData> moves) {
+    List<MoveData> result = new ArrayList<>();
+    for (MoveData move : moves) result.add(move.copy());
+    return result;
+  }
+
+  public synchronized List<MoveData> cachedAnalysis(String context) {
+    return hasAnalysisContext(context) ? copyMoves(savedAnalysis.values()) : new ArrayList<>();
+  }
+
+  public synchronized List<MoveData> cachedNormalAnalysis(String context) {
+    return hasAnalysisContext(context) ? copyMoves(savedNormalAnalysis) : new ArrayList<>();
+  }
+
+  public synchronized void saveNormalAnalysis(String context, List<MoveData> moves) {
+    useAnalysisContext(context);
+    savedNormalAnalysis = copyMoves(moves);
+  }
+
+  public synchronized void saveAnalysis(String context, List<MoveData> moves) {
+    useAnalysisContext(context);
+    for (MoveData move : moves) {
+      MoveData old = savedAnalysis.get(move.coordinate);
+      if (old == null || old.playouts <= move.playouts) savedAnalysis.put(move.coordinate, move.copy());
+    }
+  }
+
+  public synchronized void invalidateAnalysisCache() {
+    savedAnalysisContext = "";
+    savedAnalysis.clear();
+    savedNormalAnalysis.clear();
+    analysisCacheGeneration++;
+    passAnalysisVisits = 0;
+    passAnalysisScore = Double.NaN;
+    passAnalysisEngine = "";
+  }
+
   public volatile int passAnalysisVisits;
   public volatile double passAnalysisScore = Double.NaN;
   public String passAnalysisEngine = "";
@@ -279,7 +337,8 @@ public class BoardData {
         && (moves.size() > Lizzie.config.limitMaxSuggestion)) {
       for (int n = Lizzie.config.limitMaxSuggestion; n < moves.size(); n++) {
         MoveData move = moves.get(n);
-        boolean needSkip = false;
+        boolean needSkip = move.isSymmetry && move.symmetrySourceOrder >= 0
+            && move.symmetrySourceOrder < Lizzie.config.limitMaxSuggestion;
         int absoluteMaxSuggestionOrder = Lizzie.config.limitMaxSuggestion + 1;
         if (move.order < absoluteMaxSuggestionOrder) {
           for (int s = 0; s < absoluteMaxSuggestionOrder && s < lastMoves.size(); s++) {
@@ -440,6 +499,7 @@ public class BoardData {
   }
 
   public void setPlayouts(int playouts) {
+    if (playouts == 0 && (this.playouts > 0 || !savedAnalysisContext.isEmpty())) invalidateAnalysisCache();
     // if (playouts > this.playouts || isChanged) {
     this.playouts = playouts;
     // }
@@ -464,6 +524,7 @@ public class BoardData {
   }
 
   public void setPlayoutsForce(int playouts) {
+    if (playouts == 0 && (this.playouts > 0 || !savedAnalysisContext.isEmpty())) invalidateAnalysisCache();
     this.playouts = playouts;
   }
 
@@ -505,6 +566,7 @@ public class BoardData {
   }
 
   public void tryToClearBestMoves() {
+    invalidateAnalysisCache();
     bestMoves = new ArrayList<>();
     playouts = 0;
     if (Lizzie.leelaz.isKatago) {

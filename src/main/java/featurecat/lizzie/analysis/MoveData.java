@@ -9,7 +9,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /** Holds the data from Leelaz's pondering mode */
-public class MoveData {
+public class MoveData implements Cloneable {
   public String coordinate;
   public int playouts;
   public double winrate;
@@ -37,6 +37,38 @@ public class MoveData {
   public boolean lastTimeUnlimited;
   public long lastTimeUnlimitedTime;
   public boolean isSymmetry = false;
+  public String symmetryOf;
+  public int symmetrySourceOrder = -1;
+
+  public int displayOrder() {
+    return isSymmetry && symmetrySourceOrder >= 0 ? symmetrySourceOrder : order;
+  }
+
+  public MoveData copy() {
+    try {
+      MoveData copy = (MoveData) super.clone();
+      if (variation != null) copy.variation = new ArrayList<>(variation);
+      if (pvVisits != null) copy.pvVisits = new ArrayList<>(pvVisits);
+      if (movesEstimateArray != null) copy.movesEstimateArray = new ArrayList<>(movesEstimateArray);
+      return copy;
+    } catch (CloneNotSupportedException impossible) { throw new AssertionError(impossible); }
+  }
+
+  public static void resolveSymmetryOrders(List<MoveData> moves) {
+    java.util.Map<String, MoveData> byCoordinate = new java.util.HashMap<>();
+    for (MoveData move : moves) byCoordinate.put(move.coordinate, move);
+    for (MoveData move : moves) {
+      move.symmetrySourceOrder = -1;
+      MoveData source = move;
+      java.util.Set<String> seen = new java.util.HashSet<>();
+      while (source.symmetryOf != null && seen.add(source.coordinate)) {
+        MoveData next = byCoordinate.get(source.symmetryOf);
+        if (next == null) break;
+        source = next;
+        move.symmetrySourceOrder = source.order;
+      }
+    }
+  }
   public ArrayList<Double> movesEstimateArray;
 
   public MoveData() {}
@@ -288,6 +320,7 @@ public class MoveData {
         }
         if (key.equals("isSymmetryOf")) {
           result.isSymmetry = true;
+          result.symmetryOf = value;
         }
       }
     }

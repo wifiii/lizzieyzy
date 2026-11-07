@@ -442,6 +442,7 @@ public class Board {
       stack.push(node);
       while (!stack.isEmpty()) {
         BoardHistoryNode cur = stack.pop();
+        cur.getData().invalidateAnalysisCache();
         if (cur.getData().getPlayouts() > 0) {
           cur.getData().isChanged = true;
         }
@@ -560,6 +561,7 @@ public class Board {
   }
 
   public void clearbestmoves() {
+    history.getCurrentHistoryNode().getData().invalidateAnalysisCache();
     if (history.getCurrentHistoryNode().getData().getPlayouts() > 0)
       history.getCurrentHistoryNode().getData().isChanged = true;
     if (Lizzie.config.isDoubleEngineMode()) clearbestmoves2();

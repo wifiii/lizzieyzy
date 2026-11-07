@@ -2391,7 +2391,7 @@ public class BoardRenderer {
               && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
           boolean outOfOrder =
               Lizzie.config.limitMaxSuggestion > 0
-                  && move.order + 1 > Lizzie.config.limitMaxSuggestion
+                  && move.displayOrder() + 1 > Lizzie.config.limitMaxSuggestion
                   && !move.lastTimeUnlimited
                   && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
           boolean hasBackground =
@@ -2644,7 +2644,7 @@ public class BoardRenderer {
           int suggestionY = scaledMarginHeight + squareHeight * coords[1];
           boolean outOfOrder =
               Lizzie.config.limitMaxSuggestion > 0
-                  && move.order + 1 > Lizzie.config.limitMaxSuggestion
+                  && move.displayOrder() + 1 > Lizzie.config.limitMaxSuggestion
                   && !move.lastTimeUnlimited
                   && !(Lizzie.config.analyzeSgfBranches && move.isSgfBranch);
           if (!outOfOrder && move.order < 20) {

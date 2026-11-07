@@ -70,6 +70,8 @@ public class Leelaz {
   private boolean primaryLimitReached;
   private long searchSliceStarted;
   private long passSliceStarted;
+  private String branchAnalysisContext = "";
+  private boolean branchUsesNodeCache;
   private volatile long analysisRevision;
   private List<MoveData> bestMoves;
   private List<MoveData> bestMovesPrevious;
@@ -663,8 +665,12 @@ public class Leelaz {
         //			break;
       }
     }
-    if (canUseSupplemental())
-      branchAnalysis.normal(Lizzie.board.getHistory().getCurrentHistoryNode(), bestMoves);
+    MoveData.resolveSymmetryOrders(bestMoves);
+    List<MoveData> rawNormal = new ArrayList<>(bestMoves);
+    BoardData analysisData = Lizzie.board.getData();
+    String context = analysisContext();
+    boolean useNodeCache = canUseSupplemental() && Lizzie.config.enableLizzieCache;
+    if (useNodeCache && analysisData.hasOtherAnalysisContext(context)) analysisData.isChanged = true;
     currentTotalPlayouts = MoveData.getPlayouts(bestMoves);
     ArrayList<Double> estimateArray = new ArrayList<Double>();
     if (Lizzie.config.showKataGoEstimate) {
@@ -699,6 +705,26 @@ public class Leelaz {
             .getData()
             .tryToSetBestMoves(
                 bestMoves, bestMovesEnginename, true, currentTotalPlayouts, estimateArray);
+    }
+    if (canUseSupplemental()) {
+      context = analysisContext();
+      List<MoveData> normal = rawNormal;
+      if (useNodeCache) {
+        if (analysisData.bestMoves == bestMoves) {
+          analysisData.isChanged = false;
+          analysisData.saveNormalAnalysis(context, rawNormal);
+        }
+        else {
+          List<MoveData> saved = analysisData.cachedNormalAnalysis(context);
+          if (!saved.isEmpty()) normal = saved;
+        }
+      }
+      if (branchUsesNodeCache != useNodeCache || !branchAnalysisContext.equals(context))
+        branchAnalysis.clear();
+      branchUsesNodeCache = useNodeCache;
+      branchAnalysis.normal(Lizzie.board.getHistory().getCurrentHistoryNode(), normal);
+      branchAnalysisContext = context;
+      if (useNodeCache) branchAnalysis.remember(analysisData.cachedAnalysis(context));
     }
     return bestMoves;
   }
@@ -1189,7 +1215,8 @@ public class Leelaz {
             this.bestMoves = parseInfo(line.substring(5));
           }
           if (canUseSupplemental() && !this.bestMoves.isEmpty()) {
-            branchOrdinary = new ArrayList<>(Lizzie.board.getData().bestMoves);
+            branchOrdinary = Lizzie.config.showNoSuggCircle ? branchAnalysis.normalMoves()
+                : new ArrayList<>(Lizzie.board.getData().bestMoves);
             updatePassValue(branchAnalysis.best("pass"));
             showSgfBranchResults();
             if (normalLimitReached()) primaryLimitReached = true;
@@ -2535,7 +2562,7 @@ public class Leelaz {
    * @param command a GTP command containing no newline characters
    */
   public void sendCommand(String command) {
-    if (command.startsWith("komi ") || command.startsWith("kata-set-param ")
+    if (command.startsWith("kata-set-param ")
         || command.startsWith("kata-set-rules ") || command.startsWith("kata-set-rule "))
       analysisRevision++;
     if (!Boolean.TRUE.equals(branchCommand.get())) {
@@ -3064,7 +3091,7 @@ public class Leelaz {
   public String analysisContext() {
     return System.identityHashCode(this) + "|" + analysisRevision + "|" + engineCommand
         + "|" + pda + "|" + Lizzie.board.getHistory().getGameInfo().getKomi()
-        + "|" + Lizzie.config.currentKataGoRules;
+        + "|" + Lizzie.config.currentKataGoRules + "|" + Lizzie.board.getData().analysisCacheGeneration;
   }
 
   private boolean passNeedsWork() {
@@ -3094,15 +3121,12 @@ public class Leelaz {
 
   private boolean startNextSupplemental() {
     if (!canUseSupplemental()) return false;
+    String target = branchAnalysis.next(sgfBranchTargets(), Lizzie.config.sgfBranchMinVisits);
+    if (target != null) { startRestricted("branch", target); return true; }
     if (passNeedsWork() && (primaryLimitReached
         || System.currentTimeMillis() - searchSliceStarted >= 500)) {
       startRestricted("pass", "pass");
       return true;
-    }
-    String target = null;
-    if (primaryLimitReached || (!Lizzie.config.limitPlayout && !Lizzie.config.limitTime)) {
-      target = branchAnalysis.next(sgfBranchTargets(), Lizzie.config.sgfBranchMinVisits);
-      if (target != null) { startRestricted("branch", target); return true; }
     }
     if (primaryLimitReached && Lizzie.config.supplementCandidates) {
       target = branchAnalysis.next(candidateTargets(), Lizzie.config.candidateMinVisits);
@@ -3125,9 +3149,11 @@ public class Leelaz {
 
   private void showSgfBranchResults() {
     bestMoves = branchAnalysis.display(branchOrdinary, sgfBranchTargets(), candidateTargets(),
-        Lizzie.config.limitMaxSuggestion);
+        Lizzie.config.showNoSuggCircle ? 0 : Lizzie.config.limitMaxSuggestion);
     // Restricted-search values never overwrite root winrate, score or total visits.
     Lizzie.board.getData().bestMoves = new ArrayList<>(bestMoves);
+    if (Lizzie.config.enableLizzieCache)
+      Lizzie.board.getData().saveAnalysis(analysisContext(), bestMoves);
     java.util.Set<String> visible = new java.util.HashSet<>();
     for (MoveData move : bestMoves) visible.add(move.coordinate);
     List<MoveData> outOfRange = Lizzie.board.getData().bestMovesOutOfRange == null
@@ -3139,7 +3165,8 @@ public class Leelaz {
   private boolean handleSgfBranchInfo(String line) {
     if (!branchAnalysis.isActive()) return false;
     if (!canUseSupplemental()
-        || !branchAnalysis.isPosition(Lizzie.board.getHistory().getCurrentHistoryNode())) {
+        || !branchAnalysis.isPosition(Lizzie.board.getHistory().getCurrentHistoryNode())
+        || !branchAnalysisContext.equals(analysisContext())) {
       branchAnalysis.clear();
       supplementalKind = "";
       if (isPondering) ponder();

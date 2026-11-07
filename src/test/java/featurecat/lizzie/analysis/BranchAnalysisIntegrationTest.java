@@ -44,6 +44,7 @@ public class BranchAnalysisIntegrationTest {
 
   @Before public void setupPosition() throws Exception {
     engine = Lizzie.leelaz;
+    Lizzie.config.enableLizzieCache = true;
     Lizzie.config.supplementCandidates = false;
     Lizzie.config.analyzePassValue = false;
     Lizzie.config.showMoveValue = false;
@@ -162,6 +163,72 @@ public class BranchAnalysisIntegrationTest {
       assertFalse("Deleted branch result leaked", "A19".equals(move.coordinate));
   }
 
+  private void completeCachedBranches() throws Exception {
+    info(move("Q16", 5000, 0.6));
+    info(move("A19", 1000, 0.5));
+    info(move("B18", 1000, 0.4));
+    info(move("pass", 1000, 0.3));
+  }
+
+  @Test public void cachedBranchVisitsSurviveLeavingAndRevisitingTheNode() throws Exception {
+    completeCachedBranches();
+    Object root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    assertTrue(Lizzie.board.nextMove(false));
+    assertTrue(Lizzie.board.previousMove(false));
+    assertSame(root, Lizzie.board.getHistory().getCurrentHistoryNode());
+    commands.reset();
+    info(move("Q16", 1, 0.6) + " info " + move("A19", 1, 0.5).replace("order 0", "order 1"));
+    assertEquals(1000, find("A19").playouts);
+    assertEquals(1000, find("B18").playouts);
+    assertFalse(commands.toString("UTF-8").contains("allow B A19 1"));
+  }
+
+  @Test public void disablingCacheDoesNotRestorePreviousBranchVisits() throws Exception {
+    completeCachedBranches();
+    assertTrue(Lizzie.board.nextMove(false));
+    assertTrue(Lizzie.board.previousMove(false));
+    Lizzie.config.enableLizzieCache = false;
+    commands.reset();
+    info(move("Q16", 1, 0.6) + " info " + move("A19", 1, 0.5).replace("order 0", "order 1"));
+    assertEquals(1, find("A19").playouts);
+    assertTrue(commands.toString("UTF-8").contains("allow B A19 1"));
+  }
+
+  @Test public void explicitCacheClearReallyClearsSupplementalResults() throws Exception {
+    completeCachedBranches();
+    Lizzie.board.clearbestmoves();
+    commands.reset();
+    info(move("Q16", 1, 0.6) + " info " + move("A19", 1, 0.5).replace("order 0", "order 1"));
+    assertEquals(1, find("A19").playouts);
+    assertTrue(commands.toString("UTF-8").contains("allow B A19 1"));
+  }
+
+  @Test public void branchAnalysisHasPriorityOverPassAndNormalLimits() throws Exception {
+    Lizzie.config.analyzePassValue = true;
+    Lizzie.config.passValueVisits = 2000;
+    Lizzie.config.limitPlayout = true;
+    Lizzie.config.limitPlayouts = 10000;
+    set("searchSliceStarted", 0L);
+    info(move("Q16", 50, 0.6));
+    assertTrue(commands.toString("UTF-8").contains("allow B A19 1"));
+    assertFalse(commands.toString("UTF-8").contains("allow B pass 1"));
+    info(move("A19", 1000, 0.5));
+    assertTrue(commands.toString("UTF-8").contains("allow B B18 1"));
+    assertFalse(commands.toString("UTF-8").contains("allow B pass 1"));
+  }
+
+  @Test public void symmetryCopiesOfVisibleSourcesRetainTheirStatistics() throws Exception {
+    Lizzie.config.analyzeSgfBranches = false;
+    Lizzie.config.supplementCandidates = true;
+    Lizzie.config.limitMaxSuggestion = 1;
+    info(move("D4", 5000, 0.6) + " info " + move("Q16", 5000, 0.6)
+        .replace("order 0", "order 15 isSymmetryOf D4"));
+    assertEquals(5000, find("Q16").playouts);
+    assertTrue(find("Q16").isSymmetry);
+    assertEquals(0, find("Q16").displayOrder());
+    assertEquals(5000, engine.getBestMovesPlayouts());
+  }
+
   @Test public void candidateTopUpWaitsForOrdinaryLimitAndUsesEligibleMoves() throws Exception {
     Lizzie.config.analyzeSgfBranches = false;
     Lizzie.config.supplementCandidates = true;
@@ -188,11 +255,12 @@ public class BranchAnalysisIntegrationTest {
     Lizzie.config.limitPlayout = true;
     Lizzie.config.limitPlayouts = 10000;
     info(move("Q16", 5000, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
-    assertFalse(commands.toString("UTF-8").contains("allow"));
-    info(move("Q16", 10000, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
+    assertTrue(commands.toString("UTF-8").contains("allow B A19 1"));
     info(move("A19", 1000, 0.5));
     info(move("B18", 1000, 0.4));
     info(move("pass", 1000, 0.3));
+    assertFalse(commands.toString("UTF-8").contains("allow B T1 1"));
+    info(move("Q16", 10000, 0.6) + " info " + move("T1", 1, 0.01).replace("order 0", "order 1"));
     assertTrue(commands.toString("UTF-8").contains("allow B T1 1"));
     info(move("T1", 200, 0.01));
     assertFalse(engine.isPondering());
@@ -261,14 +329,15 @@ public class BranchAnalysisIntegrationTest {
           rank == 0 ? 1000 : 1, 0.5).replace("order 0", "order " + rank));
     }
     info(report.toString());
-    assertEquals(3, engine.getBestMoves().size());
+    assertEquals(361, engine.getBestMoves().size());
     assertTrue(commands.toString("UTF-8").contains("allow B A18 1"));
     info(move("A18", 200, 0.5));
     assertTrue(commands.toString("UTF-8").contains("allow B A17 1"));
     info(move("A17", 200, 0.5));
     assertFalse(engine.isPondering());
     assertFalse(commands.toString("UTF-8").contains("allow B A16 1"));
-    assertEquals(3, engine.getBestMoves().size());
+    assertEquals(1, find("A16").playouts);
+    assertEquals(361, engine.getBestMoves().size());
   }
 
   @Test public void passSearchAlternatesAndDoesNotCorruptNormalStatistics() throws Exception {

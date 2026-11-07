@@ -53,46 +53,78 @@ public final class SuggestionLabels {
     }
   }
 
-  /** Fit the entire glyph ink, including bearings/descenders, inside each circular row slot. */
+  /** Prefer the legacy three-line point sizes, then tightly pack the actual glyph ink. */
   public static List<Placement> layout(Graphics2D g, List<Row> rows,
       double centerX, double centerY, double radius) {
-    List<Placement> result = new ArrayList<>();
-    if (rows.isEmpty() || radius <= 3) return result;
-    double innerRadius = radius - Math.max(1.25, radius * 0.08);
-    double stackHeight = innerRadius * 1.62;
-    double slotHeight = stackHeight / rows.size();
-    double inkHeight = slotHeight - Math.max(0.7, innerRadius * 0.035);
-    for (int i = 0; i < rows.size(); i++) {
-      Row row = rows.get(i);
-      if (row.text.isEmpty() || inkHeight <= 0) continue;
-      double rowCenter = (i - (rows.size() - 1) / 2.0) * slotHeight;
-      Font base = row.font == null ? g.getFont() : row.font;
-      GlyphVector glyphs = base.deriveFont(100f).createGlyphVector(g.getFontRenderContext(), row.text);
-      Rectangle2D bounds = glyphs.getVisualBounds();
-      // Solve for the largest glyph rectangle whose farthest corner fits the circle.
-      double width = bounds.getWidth(), height = bounds.getHeight();
-      double a = Math.max(0.01, (width * width + height * height) / 4);
-      double b = Math.abs(rowCenter) * height;
-      double c = rowCenter * rowCenter - innerRadius * innerRadius;
-      double circularScale = (-b + Math.sqrt(b * b - 4 * a * c)) / (2 * a);
-      double scale = Math.min(circularScale, inkHeight / Math.max(0.1, height));
-      float size = (float) Math.max(0.1, 100 * scale);
-      for (int attempt = 0; attempt < 12; attempt++) {
-        glyphs = base.deriveFont(size).createGlyphVector(g.getFontRenderContext(), row.text);
-        bounds = glyphs.getVisualBounds();
-        if (fits(bounds, rowCenter, inkHeight, innerRadius)) break;
-        size *= 0.95f;
-      }
-      if (!fits(bounds, rowCenter, inkHeight, innerRadius)) continue;
-      result.add(new Placement(row, glyphs, centerX - bounds.getCenterX(),
-          centerY + rowCenter - bounds.getCenterY()));
+    if (rows.isEmpty() || radius <= 3) return new ArrayList<>();
+    List<Placement> full = packed(g, rows, centerX, centerY, radius, 1);
+    if (fits(full, centerX, centerY, radius)) return full;
+    double low = 0.001, high = 1;
+    List<Placement> result = packed(g, rows, centerX, centerY, radius, low);
+    for (int attempt = 0; attempt < 28; attempt++) {
+      double scale = (low + high) / 2;
+      List<Placement> candidate = packed(g, rows, centerX, centerY, radius, scale);
+      if (fits(candidate, centerX, centerY, radius)) {
+        result = candidate;
+        low = scale;
+      } else high = scale;
     }
     return result;
   }
 
-  private static boolean fits(Rectangle2D bounds, double centerY, double height, double radius) {
-    return bounds.getHeight() <= height
-        && Math.hypot(bounds.getWidth() / 2, Math.abs(centerY) + bounds.getHeight() / 2) <= radius;
+  private static List<Placement> packed(Graphics2D g, List<Row> rows,
+      double x, double y, double radius, double scale) {
+    List<GlyphVector> glyphs = new ArrayList<>();
+    double gap = Math.max(0.45, radius * 0.02) * scale;
+    double height = Math.max(0, rows.size() - 1) * gap;
+    for (int i = 0; i < rows.size(); i++) {
+      Row row = rows.get(i);
+      Font base = row.font == null ? g.getFont() : row.font;
+      // These are the old .35/.34/.273 cell-width sizes (cell width = 2r + 2).
+      double cellWidth = 2 * radius + 2;
+      double pointSize = rows.size() == 3
+          ? cellWidth * new double[] {0.35, 0.34, 0.273}[i]
+          : radius * (rows.size() == 4 ? 0.78 : rows.size() == 2 ? 0.85 : 1.05);
+      double widthLimit = rows.size() == 3
+          ? (i == 0 ? cellWidth * 0.67 : radius * (i == 1 ? 1.8 : 1.6)) : radius * 1.9;
+      GlyphVector vector = base.deriveFont((float) Math.max(0.1, pointSize * scale))
+          .createGlyphVector(g.getFontRenderContext(), row.text);
+      Rectangle2D ink = vector.getVisualBounds();
+      if (ink.getWidth() > widthLimit) {
+        vector = base.deriveFont((float) Math.max(0.1,
+            pointSize * scale * widthLimit / ink.getWidth()))
+            .createGlyphVector(g.getFontRenderContext(), row.text);
+      }
+      glyphs.add(vector);
+      height += vector.getVisualBounds().getHeight();
+    }
+    double top = y - height / 2;
+    List<Placement> result = new ArrayList<>();
+    for (int i = 0; i < rows.size(); i++) {
+      GlyphVector vector = glyphs.get(i);
+      Rectangle2D ink = vector.getVisualBounds();
+      result.add(new Placement(rows.get(i), vector, x - ink.getCenterX(), top - ink.getY()));
+      top += ink.getHeight() + gap;
+    }
+    return result;
+  }
+
+  private static boolean fits(List<Placement> placed, double x, double y, double radius) {
+    double inside = radius - Math.max(0.7, radius * 0.015);
+    for (Placement row : placed) {
+      java.awt.geom.PathIterator path = row.glyphs.getOutline(row.x, row.baseline).getPathIterator(null);
+      double[] points = new double[6];
+      while (!path.isDone()) {
+        int type = path.currentSegment(points);
+        int count = type == java.awt.geom.PathIterator.SEG_CLOSE ? 0
+            : type == java.awt.geom.PathIterator.SEG_CUBICTO ? 3
+            : type == java.awt.geom.PathIterator.SEG_QUADTO ? 2 : 1;
+        for (int i = 0; i < count; i++)
+          if (Math.hypot(points[2 * i] - x, points[2 * i + 1] - y) > inside) return false;
+        path.next();
+      }
+    }
+    return true;
   }
 
   public static void draw(Graphics2D graphics, List<Row> rows,
