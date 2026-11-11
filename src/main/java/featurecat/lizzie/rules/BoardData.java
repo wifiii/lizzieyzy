@@ -64,11 +64,15 @@ public class BoardData {
     passAnalysisVisits = 0;
     passAnalysisScore = Double.NaN;
     passAnalysisEngine = "";
+    databaseNormalVisits = databasePassVisits = 0;
+    databaseStatus = databaseContext = "";
   }
 
   public volatile int passAnalysisVisits;
   public volatile double passAnalysisScore = Double.NaN;
   public String passAnalysisEngine = "";
+  public volatile int databaseNormalVisits, databasePassVisits;
+  public String databaseContext = "", databaseStatus = "";
   public int moveNumber;
   public int moveMNNumber;
   public Optional<int[]> lastMove;

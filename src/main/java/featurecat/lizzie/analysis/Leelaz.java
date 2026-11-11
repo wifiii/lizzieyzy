@@ -11,6 +11,7 @@ import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Movelist;
+import featurecat.lizzie.analysis.database.*;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.util.Utils;
 import java.awt.Component;
@@ -71,6 +72,17 @@ public class Leelaz {
   private boolean primaryLimitReached;
   private PassAnalysisEngine passEngine;
   private long passGeneration;
+
+  private long databaseEpoch;
+  private BoardHistoryNode databaseNode;
+  private String databaseContext = "", databaseOptions = "";
+  private boolean databasePending, databaseChecked, databaseNormalReady, databaseNormalComplete;
+  private final java.util.Set<BoardHistoryNode> databaseIgnored =
+      java.util.Collections.newSetFromMap(new java.util.WeakHashMap<BoardHistoryNode, Boolean>());
+  private List<MoveData> databaseRawNormal = new ArrayList<>();
+  private int databaseRawVisits;
+  private AnalysisSnapshot databaseRestored;
+
   private final java.util.Map<String, String> passParameters = new java.util.LinkedHashMap<>();
   private String branchAnalysisContext = "";
   private boolean branchUsesNodeCache;
@@ -300,6 +312,7 @@ public class Leelaz {
 
   public void startEngine(int index) throws IOException {
     closePassEngine();
+    invalidateDatabaseRequest();
     passParameters.clear();
     analysisRevision++;
     if (engineCommand.trim().isEmpty()) {
@@ -673,6 +686,8 @@ public class Leelaz {
     }
     MoveData.resolveSymmetryOrders(bestMoves);
     List<MoveData> rawNormal = new ArrayList<>(bestMoves);
+    databaseRawNormal = AnalysisSnapshot.copy(rawNormal);
+    databaseRawVisits = MoveData.getPlayouts(rawNormal);
     BoardData analysisData = Lizzie.board.getData();
     String context = analysisContext();
     boolean useNodeCache = canUseSupplemental() && Lizzie.config.enableLizzieCache;
@@ -1205,6 +1220,7 @@ public class Leelaz {
               }
             } else Lizzie.leelaz = this;
           }
+          if (requestDatabaseRestore()) return;
           syncPassAnalysis();
           if (handleSgfBranchInfo(line.substring(5))) return;
           // Clear switching prompt
@@ -1264,6 +1280,7 @@ public class Leelaz {
               stopByLimit = true;
               stopByPlayouts = true;
               isPondering = !isPondering;
+              saveDatabaseCompleted();
               nameCmd();
               if (!Lizzie.config.stopAtEmptyBoard && !Lizzie.board.getHistory().noStoneBoard()) {
                 showStopPonderTips();
@@ -1273,6 +1290,7 @@ public class Leelaz {
                     > Lizzie.config.maxAnalyzeTimeMillis)) {
               stopByLimit = true;
               isPondering = !isPondering;
+              saveDatabaseCompleted();
               nameCmd();
               showStopPonderTips();
             }
@@ -1708,6 +1726,7 @@ public class Leelaz {
   }
 
   public void analyzeNextMove(boolean isLastMove) {
+    saveDatabaseCompleted();
     autoAnalysed = true;
     Lizzie.board.getHistory().getCurrentHistoryNode().analyzed = true;
     bestMoves = new ArrayList<>();
@@ -1726,6 +1745,7 @@ public class Leelaz {
     if (Lizzie.config.autoAnaDiffFirstPlayouts > 0) {
       if (!bestMoves.isEmpty()
           && bestMoves.get(0).playouts >= Lizzie.config.autoAnaDiffFirstPlayouts) {
+        saveDatabaseCompleted();
         Lizzie.board.getHistory().getCurrentHistoryNode().diffAnalyzed = true;
         return;
       }
@@ -1736,6 +1756,7 @@ public class Leelaz {
     }
     if (Lizzie.config.autoAnaDiffPlayouts > 0) {
       if (currentTotalPlayouts >= Lizzie.config.autoAnaDiffPlayouts) {
+        saveDatabaseCompleted();
         Lizzie.board.getHistory().getCurrentHistoryNode().diffAnalyzed = true;
         return;
       }
@@ -1744,6 +1765,7 @@ public class Leelaz {
     if (Lizzie.config.autoAnaDiffTime > 0) {
       long curTime = System.currentTimeMillis();
       if (curTime - startPonderTime >= Lizzie.config.autoAnaDiffTime * 1000) {
+        saveDatabaseCompleted();
         Lizzie.board.getHistory().getCurrentHistoryNode().diffAnalyzed = true;
         return;
       }
@@ -1763,6 +1785,7 @@ public class Leelaz {
     if (!autoPassReady()) return;
     if (Lizzie.config.autoAnaFirstPlayouts > 0) {
       if (!bestMoves.isEmpty() && bestMoves.get(0).playouts >= Lizzie.config.autoAnaFirstPlayouts) {
+        saveDatabaseCompleted();
         Lizzie.board.getHistory().getCurrentHistoryNode().analyzed = true;
         autoAnalysed = true;
         return;
@@ -1775,6 +1798,7 @@ public class Leelaz {
     }
     if (Lizzie.config.autoAnaPlayouts > 0) {
       if (currentTotalPlayouts >= Lizzie.config.autoAnaPlayouts) {
+        saveDatabaseCompleted();
         Lizzie.board.getHistory().getCurrentHistoryNode().analyzed = true;
         autoAnalysed = true;
         return;
@@ -1784,6 +1808,7 @@ public class Leelaz {
     if (Lizzie.config.autoAnaTime > 0) {
       long curTime = System.currentTimeMillis();
       if (curTime - startPonderTime >= Lizzie.config.autoAnaTime) {
+        saveDatabaseCompleted();
         Lizzie.board.getHistory().getCurrentHistoryNode().analyzed = true;
         autoAnalysed = true;
         return;
@@ -2573,9 +2598,13 @@ public class Leelaz {
   public synchronized void sendCommand(String command) {
     if (!Boolean.TRUE.equals(branchCommand.get())) {
       String verb = command.trim().split(" ")[0];
-      if (verb.equals("kata-set-param") || verb.equals("kata-set-rule") || verb.equals("kata-set-rules")) {
+      if (verb.equals("kata-set-param")
+          || verb.equals("kata-set-rule")
+          || verb.equals("kata-set-rules")) {
         String[] args = command.split(" ", 3);
-        passParameters.put(verb + (args.length > 1 && !verb.equals("kata-set-rules") ? " " + args[1] : ""), command);
+        passParameters.put(
+            verb + (args.length > 1 && !verb.equals("kata-set-rules") ? " " + args[1] : ""),
+            command);
       }
       if (verb.equals("play") || verb.equals("undo") || verb.equals("clear_board")
           || verb.equals("boardsize") || verb.equals("rectangular_boardsize") || verb.equals("komi")
@@ -2583,6 +2612,7 @@ public class Leelaz {
           || verb.startsWith("kata-set-") || verb.equals("stop") || verb.equals("stop-ponder")
           || verb.equals("heatmap") || verb.equals("kata-raw-nn") || verb.equals("quit")) {
         cancelPassSearch();
+        invalidateDatabaseRequest();
       }
     }
     if (command.startsWith("kata-set-param ")
@@ -2663,6 +2693,7 @@ public class Leelaz {
   }
 
   public synchronized void sendCommandNoLeelaz2(String command) {
+    invalidateDatabaseRequest();
     cancelPassSearch();
     branchAnalysis.clear();
     branchSearchRejected = false;
@@ -3055,6 +3086,344 @@ public class Leelaz {
     }
   }
 
+  private String databaseOptions() {
+    return Lizzie.config.analysisDatabasePath
+        + "|"
+        + Lizzie.config.analysisDatabaseMaxMoves
+        + "|"
+        + Lizzie.config.analysisDatabaseSymmetries
+        + "|"
+        + Lizzie.config.analysisDatabaseSkipSatisfied
+        + "|"
+        + Lizzie.config.analysisDatabaseModel
+        + "|"
+        + Lizzie.config.analysisDatabaseConfig;
+  }
+
+  private synchronized void invalidateDatabaseRequest() {
+    databaseEpoch++;
+    databasePending = databaseChecked = databaseNormalReady = databaseNormalComplete = false;
+    databaseRestored = null;
+    databaseNode = null;
+    databaseRawNormal = new ArrayList<>();
+    databaseRawVisits = 0;
+  }
+
+  public synchronized void databaseSettingsChanged() {
+    invalidateDatabaseRequest();
+    databaseIgnored.clear();
+    if (isPondering) ponder();
+    Lizzie.frame.refresh(1);
+  }
+
+  public synchronized void ignoreDatabaseForCurrentPosition() {
+    databaseIgnored.add(Lizzie.board.getHistory().getCurrentHistoryNode());
+    invalidateDatabaseRequest();
+    Lizzie.board.getData().invalidateAnalysisCache();
+    Lizzie.board.getData().isChanged = true;
+    ponder();
+  }
+
+  private boolean databaseEligible() {
+    return Lizzie.config.analysisDatabaseEnabled
+        && isKatago
+        && this == Lizzie.leelaz
+        && !noAnalyze
+        && !isheatmap
+        && (!(useJavaSSH || isSSH)
+            || (!Lizzie.config.analysisDatabaseModel.trim().isEmpty()
+                && !Lizzie.config.analysisDatabaseConfig.trim().isEmpty()))
+        && !Lizzie.config.isDoubleEngineMode()
+        && !EngineManager.isEngineGame
+        && !Lizzie.frame.isPlayingAgainstLeelaz
+        && !Lizzie.frame.isAnaPlayingAgainstLeelaz
+        && !Lizzie.frame.isKeepingForce
+        && !LizzieFrame.isKeepForcing
+        && !LizzieFrame.isTempForcing
+        && Lizzie.board.getData().moveNumber <= Lizzie.config.analysisDatabaseMaxMoves
+        && (!Lizzie.config.isAutoAna
+            || Lizzie.frame.isAutoAnalyzingDiffNode
+            || (Lizzie.board.getData().blackToPlay
+                ? Lizzie.config.anaBlack
+                : Lizzie.config.anaWhite));
+  }
+
+  private PositionKey databasePosition() {
+    BoardData data = Lizzie.board.getData();
+    StringBuilder stones = new StringBuilder();
+    for (Stone stone : data.stones)
+      stones.append(stone.isBlack() ? '1' : stone.isWhite() ? '2' : '0');
+    int koX = -1, koY = -1;
+    BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
+    if (data.lastMove.isPresent() && node.previous().isPresent()) {
+      int[] last = data.lastMove.get();
+      Stone color = data.stones[Board.getIndex(last[0], last[1])];
+      Stone[] before = node.previous().get().getData().stones;
+      int removed = -1, count = 0;
+      if (before.length == data.stones.length && color != Stone.EMPTY) {
+        for (int i = 0; i < before.length; i++)
+          if (before[i].isBlack() != color.isBlack()
+              && before[i] != Stone.EMPTY
+              && data.stones[i] == Stone.EMPTY) {
+            removed = i;
+            count++;
+          }
+        if (count == 1) {
+          int friends = 0, liberties = 0;
+          for (int[] d : new int[][] {{1, 0}, {-1, 0}, {0, 1}, {0, -1}}) {
+            int x = last[0] + d[0], y = last[1] + d[1];
+            if (x < 0 || y < 0 || x >= Board.boardWidth || y >= Board.boardHeight) continue;
+            Stone adjacent = data.stones[Board.getIndex(x, y)];
+            if (adjacent == color) friends++;
+            if (adjacent == Stone.EMPTY) liberties++;
+          }
+          if (friends == 0 && liberties == 1) {
+            koX = removed / Board.boardHeight;
+            koY = removed % Board.boardHeight;
+          }
+        }
+      }
+    }
+    return new PositionKey(
+        Board.boardWidth,
+        Board.boardHeight,
+        stones.toString(),
+        data.blackToPlay,
+        koX,
+        koY,
+        Lizzie.config.analysisDatabaseSymmetries);
+  }
+
+  private String databaseRules() {
+    return recentRulesLine == null ? "" : recentRulesLine.trim();
+  }
+
+  private boolean ordinaryDatabaseTargetMet(AnalysisSnapshot snapshot) {
+    if (snapshot.visits <= 0 || snapshot.normal.isEmpty()) return false;
+    int first = snapshot.normal.get(0).playouts;
+    if (Lizzie.config.isAutoAna) {
+      if (Lizzie.frame.isAutoAnalyzingDiffNode)
+        return (Lizzie.config.autoAnaDiffPlayouts > 0
+                && snapshot.visits >= Lizzie.config.autoAnaDiffPlayouts)
+            || (Lizzie.config.autoAnaDiffFirstPlayouts > 0
+                && first >= Lizzie.config.autoAnaDiffFirstPlayouts);
+      return (Lizzie.config.autoAnaPlayouts > 0 && snapshot.visits >= Lizzie.config.autoAnaPlayouts)
+          || (Lizzie.config.autoAnaFirstPlayouts > 0
+              && first >= Lizzie.config.autoAnaFirstPlayouts);
+    }
+    return Lizzie.config.limitPlayout
+        && !outOfPlayoutsLimit
+        && snapshot.visits >= Lizzie.config.limitPlayouts;
+  }
+
+  private void databaseProblem(Exception error) {
+    String detail =
+        error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+    if (detail.startsWith("Database.") && Lizzie.resourceBundle.containsKey(detail))
+      detail = Lizzie.resourceBundle.getString(detail);
+    Lizzie.board.getData().databaseStatus =
+        Lizzie.resourceBundle.getString("Database.unavailable") + detail;
+    System.err.println("Analysis database: " + detail);
+    Lizzie.frame.refresh(1);
+  }
+
+  /**
+   * True while lookup owns startup; completion resumes ponder on the EDT with a stale-result guard.
+   */
+  private synchronized boolean requestDatabaseRestore() {
+    if (!databaseEligible()
+        || !Lizzie.config.analysisDatabaseRead
+        || databaseRules().isEmpty()
+        || databaseIgnored.contains(Lizzie.board.getHistory().getCurrentHistoryNode()))
+      return false;
+    final BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
+    final String context = analysisContext(), options = databaseOptions();
+    if (databaseNode == node && databaseContext.equals(context) && databaseOptions.equals(options))
+      return databasePending;
+    databaseNode = node;
+    databaseContext = context;
+    databaseOptions = options;
+    databasePending = true;
+    databaseChecked = false;
+    databaseNormalReady = databaseNormalComplete = false;
+    final long epoch = ++databaseEpoch;
+    final PositionKey position = databasePosition();
+    final String command = engineCommand, rules = databaseRules();
+    final String model = Lizzie.config.analysisDatabaseModel,
+        cfg = Lizzie.config.analysisDatabaseConfig;
+    final java.nio.file.Path path = java.nio.file.Paths.get(Lizzie.config.analysisDatabasePath);
+    final java.util.Map<String, String> parameters = new java.util.LinkedHashMap<>(passParameters);
+    final boolean remote = useJavaSSH || isSSH;
+    final double advantage = pda, komiValue = Lizzie.board.getHistory().getGameInfo().getKomi();
+    AnalysisDatabase.IO.execute(
+        () -> {
+          AnalysisSnapshot result = null;
+          Exception failure = null;
+          try {
+            String identity =
+                EngineIdentity.create(
+                    command, model, cfg, rules, komiValue, parameters, advantage, remote);
+            result = AnalysisDatabase.load(path, position, identity);
+          } catch (Exception e) {
+            failure = e;
+          }
+          final AnalysisSnapshot loaded = result;
+          final Exception problem = failure;
+          SwingUtilities.invokeLater(
+              () -> {
+                synchronized (Leelaz.this) {
+                  if (epoch != databaseEpoch
+                      || node != Lizzie.board.getHistory().getCurrentHistoryNode()) return;
+                  if (!context.equals(analysisContext())
+                      || !options.equals(databaseOptions())
+                      || !databaseEligible()) {
+                    invalidateDatabaseRequest();
+                    if (isPondering && Leelaz.this == Lizzie.leelaz) ponder();
+                    return;
+                  }
+                  databasePending = false;
+                  databaseChecked = true;
+                  if (problem != null) databaseProblem(problem);
+                  else restoreDatabaseSnapshot(loaded);
+                  if (isPondering) ponder();
+                }
+              });
+        });
+    return true;
+  }
+
+  private void restoreDatabaseSnapshot(AnalysisSnapshot snapshot) {
+    databaseRestored = snapshot;
+    BoardData data = Lizzie.board.getData();
+    databaseNormalReady =
+        Lizzie.config.analysisDatabaseSkipSatisfied && ordinaryDatabaseTargetMet(snapshot);
+    if (snapshot.visits > 0 && !snapshot.normal.isEmpty()) {
+      List<MoveData> normal = AnalysisSnapshot.copy(snapshot.normal);
+      data.isChanged = true;
+      data.tryToSetBestMoves(
+          normal,
+          bestMovesEnginename,
+          true,
+          snapshot.visits,
+          snapshot.ownership == null ? null : new ArrayList<>(snapshot.ownership));
+      data.winrate = snapshot.winrate;
+      data.scoreMean = snapshot.score;
+      data.scoreStdev = snapshot.stdev;
+      scoreMean = snapshot.score;
+      scoreStdev = snapshot.stdev;
+      data.databaseNormalVisits = snapshot.visits;
+      data.databaseContext = analysisContext();
+      data.saveNormalAnalysis(analysisContext(), snapshot.normal);
+      List<MoveData> all = AnalysisSnapshot.copy(snapshot.normal);
+      all.addAll(AnalysisSnapshot.copy(snapshot.supplemental));
+      data.saveAnalysis(analysisContext(), all);
+      branchAnalysis.normal(Lizzie.board.getHistory().getCurrentHistoryNode(), snapshot.normal);
+      branchAnalysis.remember(all);
+      branchAnalysisContext = analysisContext();
+      branchOrdinary = AnalysisSnapshot.copy(data.bestMoves);
+      bestMoves = AnalysisSnapshot.copy(data.bestMoves);
+      currentTotalPlayouts = snapshot.visits;
+      databaseRawNormal = AnalysisSnapshot.copy(snapshot.normal);
+      databaseRawVisits = snapshot.visits;
+      if (canUseSupplemental()) showSgfBranchResults();
+    }
+    if (snapshot.passVisits > 0) {
+      data.passAnalysisEngine = analysisContext();
+      data.passAnalysisVisits = snapshot.passVisits;
+      data.passAnalysisScore = snapshot.passScore;
+      data.databasePassVisits = snapshot.passVisits;
+    }
+    if (snapshot.visits > 0 || snapshot.passVisits > 0)
+      data.databaseStatus =
+          String.format(
+              java.util.Locale.ROOT,
+              Lizzie.resourceBundle.getString("Database.hit"),
+              Utils.getPlayoutsString(snapshot.visits),
+              Utils.getPlayoutsString(snapshot.passVisits));
+    Lizzie.frame.refresh(1);
+  }
+
+  private synchronized boolean runDatabaseSatisfiedAnalysis() {
+    databaseNormalReady =
+        databaseRestored != null
+            && Lizzie.config.analysisDatabaseSkipSatisfied
+            && ordinaryDatabaseTargetMet(databaseRestored);
+    if (!databaseNormalReady) return false;
+    syncPassAnalysis();
+    if (Lizzie.config.isAutoAna) {
+      notifyAutoAnalysisProgress();
+      return true;
+    }
+    primaryLimitReached = true;
+    if (canUseSupplemental() && startNextSupplemental()) return true;
+    databaseNormalComplete = true;
+    if (!isPassValueEnabled() || !passNeedsWork()) finishSupplemental();
+    return true;
+  }
+
+  private synchronized void saveDatabaseCompleted() {
+    if (branchAnalysis.isActive() || branchSearchRejected) return;
+    databaseNormalComplete = true;
+    if (!databaseEligible()
+        || !Lizzie.config.analysisDatabaseWrite
+        || (isPassValueEnabled() && passNeedsWork())
+        || databaseRules().isEmpty()) return;
+    final BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
+    final PositionKey position = databasePosition();
+    final AnalysisSnapshot snapshot = new AnalysisSnapshot();
+    snapshot.normal = AnalysisSnapshot.copy(databaseRawNormal);
+    snapshot.visits = databaseRawVisits;
+    if (!snapshot.normal.isEmpty()) {
+      MoveData first = snapshot.normal.get(0);
+      snapshot.winrate = first.winrate;
+      snapshot.score = first.scoreMean;
+      snapshot.stdev = first.scoreStdev;
+    }
+    List<MoveData> display = new ArrayList<>(node.getData().bestMoves);
+    if (node.getData().bestMovesOutOfRange != null)
+      display.addAll(node.getData().bestMovesOutOfRange);
+    for (MoveData move : display) {
+      MoveData ordinary = null;
+      for (MoveData m : snapshot.normal)
+        if (m.coordinate.equals(move.coordinate)) {
+          ordinary = m;
+          break;
+        }
+      if (ordinary == null || move.playouts > ordinary.playouts)
+        snapshot.supplemental.add(move.copy());
+    }
+    if (node.getData().estimateArray != null)
+      snapshot.ownership = new ArrayList<>(node.getData().estimateArray);
+    if (node.getData().passAnalysisEngine.equals(analysisContext())) {
+      snapshot.passVisits = node.getData().passAnalysisVisits;
+      snapshot.passScore = node.getData().passAnalysisScore;
+    }
+    final String command = engineCommand, rules = databaseRules();
+    final String model = Lizzie.config.analysisDatabaseModel,
+        cfg = Lizzie.config.analysisDatabaseConfig;
+    final java.nio.file.Path path = java.nio.file.Paths.get(Lizzie.config.analysisDatabasePath);
+    final java.util.Map<String, String> parameters = new java.util.LinkedHashMap<>(passParameters);
+    final boolean remote = useJavaSSH || isSSH;
+    final double advantage = pda, komiValue = Lizzie.board.getHistory().getGameInfo().getKomi();
+    AnalysisDatabase.IO.execute(
+        () -> {
+          try {
+            String identity =
+                EngineIdentity.create(
+                    command, model, cfg, rules, komiValue, parameters, advantage, remote);
+            AnalysisDatabase.save(path, position, identity, snapshot);
+          } catch (Exception e) {
+            SwingUtilities.invokeLater(
+                () -> {
+                  synchronized (Leelaz.this) {
+                    if (node == Lizzie.board.getHistory().getCurrentHistoryNode())
+                      databaseProblem(e);
+                  }
+                });
+          }
+        });
+  }
+
   private boolean canUseSupplemental() {
     return (Lizzie.config.analyzeSgfBranches || Lizzie.config.supplementCandidates
             || Lizzie.config.analyzePassValue) && isKatago && this == Lizzie.leelaz
@@ -3139,11 +3508,19 @@ public class Leelaz {
     if (passEngine == null) passEngine = new PassAnalysisEngine(new PassAnalysisEngine.Settings(
         engineCommand, useJavaSSH, ip, port, userName, password, useKeyGen, keyGenPath));
     final long generation = passGeneration;
-    passEngine.request(node, context + "#" + generation, setup, node.getData().blackToPlay,
-        passValueMinimum(), getInterval(), new PassAnalysisEngine.Listener() {
+    passEngine.request(
+        node,
+        context + "#" + generation,
+        setup,
+        node.getData().blackToPlay,
+        passValueMinimum(),
+        getInterval(),
+        new PassAnalysisEngine.Listener() {
           public void result(int visits, double score) {
             synchronized (Leelaz.this) {
-              if (generation != passGeneration || Leelaz.this != Lizzie.leelaz || !isPassValueEnabled()
+              if (generation != passGeneration
+                  || Leelaz.this != Lizzie.leelaz
+                  || !isPassValueEnabled()
                   || node != Lizzie.board.getHistory().getCurrentHistoryNode()
                   || !context.equals(analysisContext())) return;
               BoardData data = node.getData();
@@ -3152,29 +3529,41 @@ public class Leelaz {
                 data.passAnalysisScore = score;
                 data.passAnalysisVisits = visits;
                 Lizzie.frame.refresh(1);
+                if (!Lizzie.config.isAutoAna
+                    && databaseNormalComplete
+                    && visits >= passValueMinimum()) {
+                  saveDatabaseCompleted();
+                  if (databaseNormalReady) finishSupplemental();
+                }
                 if (Lizzie.config.isAutoAna && visits >= passValueMinimum()) {
-                  SwingUtilities.invokeLater(() -> {
-                    synchronized (Leelaz.this) {
-                      if (generation == passGeneration && Lizzie.config.isAutoAna
-                          && node == Lizzie.board.getHistory().getCurrentHistoryNode()
-                          && context.equals(analysisContext())) notifyAutoAnalysisProgress();
-                    }
-                  });
+                  SwingUtilities.invokeLater(
+                      () -> {
+                        synchronized (Leelaz.this) {
+                          if (generation == passGeneration
+                              && Lizzie.config.isAutoAna
+                              && node == Lizzie.board.getHistory().getCurrentHistoryNode()
+                              && context.equals(analysisContext())) notifyAutoAnalysisProgress();
+                        }
+                      });
                 }
               }
             }
           }
+
           public void failed(String message) {
             System.err.println("Pass-value helper stopped: " + message);
-            SwingUtilities.invokeLater(() -> {
-              synchronized (Leelaz.this) {
-                if (generation != passGeneration || !Lizzie.config.isAutoAna
-                    || !Lizzie.config.autoAnaPassValue
-                    || node != Lizzie.board.getHistory().getCurrentHistoryNode()) return;
-                LizzieFrame.toolbar.stopAutoAna(false, true);
-                Utils.showMsg(Lizzie.resourceBundle.getString("StartAnaDialog.passFailed") + message);
-              }
-            });
+            SwingUtilities.invokeLater(
+                () -> {
+                  synchronized (Leelaz.this) {
+                    if (generation != passGeneration
+                        || !Lizzie.config.isAutoAna
+                        || !Lizzie.config.autoAnaPassValue
+                        || node != Lizzie.board.getHistory().getCurrentHistoryNode()) return;
+                    LizzieFrame.toolbar.stopAutoAna(false, true);
+                    Utils.showMsg(
+                        Lizzie.resourceBundle.getString("StartAnaDialog.passFailed") + message);
+                  }
+                });
           }
         });
   }
@@ -3188,9 +3577,19 @@ public class Leelaz {
   }
 
   public String analysisContext() {
-    return System.identityHashCode(this) + "|" + analysisRevision + "|" + engineCommand
-        + "|" + pda + "|" + Lizzie.board.getHistory().getGameInfo().getKomi()
-        + "|" + Lizzie.config.currentKataGoRules + "|" + Lizzie.board.getData().analysisCacheGeneration;
+    return System.identityHashCode(this)
+        + "|"
+        + analysisRevision
+        + "|"
+        + engineCommand
+        + "|"
+        + pda
+        + "|"
+        + Lizzie.board.getHistory().getGameInfo().getKomi()
+        + "|"
+        + Lizzie.config.currentKataGoRules
+        + "|"
+        + Lizzie.board.getData().analysisCacheGeneration;
   }
 
   public boolean isPassValueEnabled() {
@@ -3234,6 +3633,7 @@ public class Leelaz {
   }
 
   private void notifyAutoAnalysisProgress() {
+    if (bestMoves.isEmpty()) return;
     if (Lizzie.frame.isAutoAnalyzingDiffNode) nofityDiffAna();
     else if (Lizzie.config.analyzeAllBranch) notifyAutoAnaAllBranch();
     else notifyAutoAna();
@@ -3259,6 +3659,7 @@ public class Leelaz {
   }
 
   private void finishSupplemental() {
+    saveDatabaseCompleted();
     branchAnalysis.start(null);
     supplementalKind = "";
     stopByLimit = true;
@@ -3310,7 +3711,10 @@ public class Leelaz {
     for (String info : line.split("ownership")[0].split(" info ")) {
       if (!info.trim().isEmpty()) moves.add(MoveData.fromInfoKatago(info));
     }
-    int minimum = kind.equals("candidate") ? Lizzie.config.candidateMinVisits : Lizzie.config.sgfBranchMinVisits;
+    int minimum =
+        kind.equals("candidate")
+            ? Lizzie.config.candidateMinVisits
+            : Lizzie.config.sgfBranchMinVisits;
     boolean complete = branchAnalysis.accept(moves, minimum);
     showSgfBranchResults();
     if (complete) {
@@ -3423,6 +3827,9 @@ public class Leelaz {
       leela0110Ponder(true);
       return;
     }
+    if (requestDatabaseRestore()) return;
+    if (runDatabaseSatisfiedAnalysis()) return;
+    databaseNormalComplete = false;
     if (Lizzie.frame.isKeepingForce || LizzieFrame.isKeepForcing) {
       if (LizzieFrame.allowcoords != "") {
         Lizzie.leelaz.analyzeAvoid(
@@ -3525,6 +3932,7 @@ public class Leelaz {
 
   /** End the process */
   public void shutdown() {
+    invalidateDatabaseRequest();
     closePassEngine();
     branchAnalysis.clear();
     leela0110StopPonder();

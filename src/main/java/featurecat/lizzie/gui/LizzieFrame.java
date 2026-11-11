@@ -7036,6 +7036,8 @@ public class LizzieFrame extends JFrame {
       String valueComment = featurecat.lizzie.analysis.MoveValue.comment(Lizzie.board.getData());
       comment += (comment.isEmpty() ? "" : "\n") + valueComment;
     }
+    if (Lizzie.config.analysisDatabaseEnabled && !Lizzie.board.getData().databaseStatus.isEmpty())
+      comment += (comment.isEmpty() ? "" : "\n") + Lizzie.board.getData().databaseStatus;
     if (Lizzie.config.commentFontSize <= 0) {
       int fontSize;
       if (Lizzie.config.isFloatBoardMode()) {

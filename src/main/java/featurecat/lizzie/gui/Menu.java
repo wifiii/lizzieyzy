@@ -3150,6 +3150,15 @@ public class Menu extends JMenuBar {
           }
         });
     analyzeMenu.add(togglePonder);
+    JFontMenuItem databaseSettings = new JFontMenuItem(resourceBundle.getString("Database.title"));
+    databaseSettings.addActionListener(e -> AnalysisDatabaseSettings.show());
+    analyzeMenu.add(databaseSettings);
+    JFontMenuItem ignoreDatabase = new JFontMenuItem(resourceBundle.getString("Database.ignore"));
+    ignoreDatabase.addActionListener(e -> { if (Lizzie.leelaz != null) Lizzie.leelaz.ignoreDatabaseForCurrentPosition(); });
+    analyzeMenu.add(ignoreDatabase);
+    JFontMenuItem clearDatabase = new JFontMenuItem(resourceBundle.getString("Database.clear"));
+    clearDatabase.addActionListener(e -> AnalysisDatabaseSettings.clear());
+    analyzeMenu.add(clearDatabase);
 
     JFontMenuItem sgfBranchSettings =
         new JFontMenuItem(resourceBundle.getString("Menu.sgfBranchAnalysis"));

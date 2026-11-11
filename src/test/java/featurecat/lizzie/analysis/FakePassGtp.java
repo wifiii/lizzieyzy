@@ -34,6 +34,12 @@ public final class FakePassGtp {
             for (int visits : new int[] {250, 1000, 4000}) {
               Thread.sleep(150);
               if (generation.get() != token) return;
+              if (args.length > 1 && args[1].equals("gated") && visits == 4000) {
+                while (!new File(args[0]+".release").exists()) {
+                  if (generation.get()!=token) return;
+                  Thread.sleep(10);
+                }
+              }
               if (args.length > 1 && args[1].equals("mixed")) {
                 System.out.println("info move D4 visits 7500 winrate 0.9 scoreMean 22.8"
                     + " scoreStdev 1 prior 0.1 order 0 pv D4"

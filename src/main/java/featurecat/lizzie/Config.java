@@ -168,6 +168,16 @@ public class Config {
   public volatile int passValueVisits = 1000;
   public volatile boolean autoAnaPassValue = false;
   public volatile int autoAnaPassValueVisits = 1000;
+  public boolean analysisDatabaseEnabled = false;
+  public String analysisDatabasePath = defaultAnalysisDatabasePath();
+  public int analysisDatabaseMaxMoves = 20;
+  public boolean analysisDatabaseRead = true, analysisDatabaseWrite = true;
+  public boolean analysisDatabaseSymmetries = true, analysisDatabaseSkipSatisfied = true;
+  public String analysisDatabaseModel = "", analysisDatabaseConfig = "";
+
+  public static String defaultAnalysisDatabasePath() {
+    return java.nio.file.Paths.get(System.getProperty("user.home"), ".lizzieyzy", "analysis.sqlite3").toString();
+  }
   public volatile boolean showMoveValue = false;
   public volatile boolean analyzeSgfBranches = false;
   public volatile int sgfBranchMinVisits = 1000;
@@ -1094,6 +1104,15 @@ public class Config {
     analyzeAllBranch = uiConfig.optBoolean("analyze-all-branch", false);
     autoAnaPassValue = uiConfig.optBoolean("auto-ana-pass-value", false);
     autoAnaPassValueVisits = Math.max(1, uiConfig.optInt("auto-ana-pass-value-visits", 1000));
+    analysisDatabaseEnabled = uiConfig.optBoolean("analysis-database-enabled", false);
+    analysisDatabasePath = uiConfig.optString("analysis-database-path", defaultAnalysisDatabasePath());
+    analysisDatabaseMaxMoves = Math.max(0, uiConfig.optInt("analysis-database-max-moves", 20));
+    analysisDatabaseRead = uiConfig.optBoolean("analysis-database-read", true);
+    analysisDatabaseWrite = uiConfig.optBoolean("analysis-database-write", true);
+    analysisDatabaseSymmetries = uiConfig.optBoolean("analysis-database-symmetries", true);
+    analysisDatabaseSkipSatisfied = uiConfig.optBoolean("analysis-database-skip-satisfied", true);
+    analysisDatabaseModel = uiConfig.optString("analysis-database-model", "");
+    analysisDatabaseConfig = uiConfig.optString("analysis-database-config", "");
 
     // autoInterval = uiConfig.optInt("autosave-interval-millseconds", -1);
     autoResume = uiConfig.optBoolean("resume-previous-game", false);

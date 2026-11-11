@@ -1271,6 +1271,8 @@ public class BoardRenderer {
 
   /** Draw the stones. We cache the image for a performance boost. */
   public void drawStones(BoardData data, Stone[] stones) {
+    final int columns = Board.boardWidth, rows = Board.boardHeight;
+    if (stones.length != columns * rows) return; // A resize raced this paint; the next repaint uses the new board.
     // draw a new image if frame size changes or board state changes
     if (cachedStonesImage.getWidth() != boardWidth
         || cachedStonesImage.getHeight() != boardHeight
@@ -1292,25 +1294,26 @@ public class BoardRenderer {
       gShadow.setRenderingHint(KEY_ANTIALIASING, VALUE_ANTIALIAS_ON);
       drawShadowCache();
       if (Lizzie.config.usePureStone) {
-        for (int i = 0; i < Board.boardWidth; i++) {
-          for (int j = 0; j < Board.boardHeight; j++) {
+        for (int i = 0; i < columns; i++) {
+          for (int j = 0; j < rows; j++) {
             int stoneX = scaledMarginWidth + squareWidth * i;
             int stoneY = scaledMarginHeight + squareHeight * j;
-            drawStoneSimple(g, gShadow, stoneX, stoneY, stones[Board.getIndex(i, j)]);
+            drawStoneSimple(g, gShadow, stoneX, stoneY, stones[i * rows + j]);
           }
         }
       } else {
-        final CountDownLatch latch = new CountDownLatch(Board.boardWidth);
-        for (int i = 0; i < Board.boardWidth; i++) {
+        final CountDownLatch latch = new CountDownLatch(columns);
+        for (int i = 0; i < columns; i++) {
           final Integer threadI = i;
           new Thread() {
             public void run() {
-              for (int j = 0; j < Board.boardHeight; j++) {
-                int stoneX = scaledMarginWidth + squareWidth * threadI;
-                int stoneY = scaledMarginHeight + squareHeight * j;
-                drawStone(g, gShadow, stoneX, stoneY, stones[Board.getIndex(threadI, j)]);
-              }
-              latch.countDown();
+              try {
+                for (int j = 0; j < rows; j++) {
+                  int stoneX = scaledMarginWidth + squareWidth * threadI;
+                  int stoneY = scaledMarginHeight + squareHeight * j;
+                  drawStone(g, gShadow, stoneX, stoneY, stones[threadI * rows + j]);
+                }
+              } finally { latch.countDown(); }
             }
           }.start();
         }

@@ -47,6 +47,7 @@ public class BranchAnalysisIntegrationTest {
   @Before public void setupPosition() throws Exception {
     engine = Lizzie.leelaz;
     originalEngineCommand = engine.engineCommand();
+    Lizzie.config.analysisDatabaseEnabled = false;
     Lizzie.config.isAutoAna = false;
     Lizzie.config.autoAnaPassValue = false;
     Lizzie.config.autoAnaPassValueVisits = 1000;
@@ -355,6 +356,7 @@ public class BranchAnalysisIntegrationTest {
   }
 
   @After public void closeHelper() throws Exception {
+    Lizzie.config.analysisDatabaseEnabled = false;
     Lizzie.config.isAutoAna = false;
     Lizzie.frame.isAutoAnalyzingDiffNode = false;
     Method close = Leelaz.class.getDeclaredMethod("closePassEngine");
@@ -757,6 +759,229 @@ public class BranchAnalysisIntegrationTest {
     } finally { java.nio.file.Files.write(configPath, originalConfig); }
   }
 
+  private java.nio.file.Path databaseFile, databaseModel;
+
+  private void flushMainCommands() throws Exception {
+    synchronized (engine) {
+      Field queue = Leelaz.class.getDeclaredField("cmdQueue");queue.setAccessible(true);
+      Method flush = Leelaz.class.getDeclaredMethod("trySendCommandFromQueue");flush.setAccessible(true);
+      for (int i=0;i<100 && !((java.util.Deque<?>)queue.get(engine)).isEmpty();i++) {
+        engine.setResponseUpToDate();flush.invoke(engine);
+      }
+    }
+  }
+
+  private void databaseFixture(int ordinary, int pass) throws Exception {
+    databaseFixture(ordinary, pass, "normal");
+  }
+
+  private void databaseFixture(int ordinary, int pass, String mode) throws Exception {
+    if (databaseFile == null) {
+      java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("opening-database");
+      databaseFile = dir.resolve("analysis.sqlite3"); databaseModel = dir.resolve("model.bin");
+      java.nio.file.Files.write(databaseModel, new byte[] {1,2,3});
+    }
+    Lizzie.config.analysisDatabasePath = databaseFile.toString();
+    Lizzie.config.analysisDatabaseModel = databaseModel.toString();
+    Lizzie.config.analysisDatabaseConfig = "";
+    Lizzie.config.analysisDatabaseMaxMoves = 20;
+    Lizzie.config.analysisDatabaseRead = Lizzie.config.analysisDatabaseWrite = true;
+    Lizzie.config.analysisDatabaseSkipSatisfied = Lizzie.config.analysisDatabaseSymmetries = true;
+    Lizzie.config.analysisDatabaseEnabled = true;
+    set("recentRulesLine", "= {\"koRule\":\"SIMPLE\",\"scoringRule\":\"AREA\"}");
+    Lizzie.config.limitPlayout = true; Lizzie.config.limitPlayouts = ordinary;
+    boolean needsStart = !engine.isPondering();
+    usePassHelper(mode, pass);
+    if (needsStart) engine.ponder();
+    await(() -> {
+      Field f = Leelaz.class.getDeclaredField("databaseChecked"); f.setAccessible(true); return f.getBoolean(engine);
+    });
+    flushMainCommands();
+  }
+
+  private void reloadDatabasePosition(int ordinary, int pass) throws Exception {
+    Method close = Leelaz.class.getDeclaredMethod("closePassEngine");close.setAccessible(true);close.invoke(engine);
+    engine.isKatago = false;
+    SGFParser.loadFromString("(;GM[1]FF[4]SZ[19](;B[aa])(;B[bb])(;B[]))");
+    engine.isKatago = true;
+    databaseFixture(ordinary, pass);
+  }
+
+  private int databaseVisits(String kind) throws Exception {
+    featurecat.lizzie.analysis.database.AnalysisDatabase.IO.submit(() -> {}).get(10, java.util.concurrent.TimeUnit.SECONDS);
+    if (!java.nio.file.Files.exists(databaseFile)) return 0;
+    try (java.sql.Connection c = java.sql.DriverManager.getConnection("jdbc:sqlite:"+databaseFile);
+        java.sql.PreparedStatement q = c.prepareStatement("SELECT MAX(visits) FROM analysis WHERE kind=?")) {
+      q.setString(1,kind);try(java.sql.ResultSet r=q.executeQuery()){return r.next()?r.getInt(1):0;}
+    }
+  }
+
+  private void saveDatabaseFixture() throws Exception {
+    databaseFixture(100,1000);
+    info(move("Q16",100,0.6).replace("scoreMean 2","scoreMean 5"));
+    awaitPass();
+    assertEquals(100,databaseVisits("normal"));assertEquals(1000,databaseVisits("pass"));
+  }
+
+  @Test public void databaseRestoresCompletedPositionWithoutEitherSearch() throws Exception {
+    saveDatabaseFixture();reloadDatabasePosition(100,1000);
+    assertEquals(100,Lizzie.board.getData().getPlayouts());
+    assertEquals(1000,Lizzie.board.getData().passAnalysisVisits);
+    assertEquals(5,Lizzie.board.getData().scoreMean,0);
+    assertEquals(-6.3,Lizzie.board.getData().passAnalysisScore,0.0001);
+    assertEquals("Q16",engine.getBestMoves().get(0).coordinate);
+    assertFalse(commands.toString("UTF-8").contains("kata-analyze"));
+    assertFalse(helperCommands().contains("START"));
+    assertFalse(engine.isPondering());
+    assertFalse(Lizzie.board.getData().databaseStatus.isEmpty());
+  }
+
+  @Test public void databaseOnlyRunsMissingPassComponent() throws Exception {
+    saveDatabaseFixture();reloadDatabasePosition(100,4000);
+    assertEquals(100,Lizzie.board.getData().getPlayouts());
+    assertFalse(commands.toString("UTF-8").contains("kata-analyze"));
+    await(() -> Lizzie.board.getData().passAnalysisVisits>=4000);
+    assertEquals(100,databaseVisits("normal"));assertEquals(4000,databaseVisits("pass"));
+    assertTrue(helperCommands().contains("START"));
+  }
+
+  @Test public void databaseOnlyRunsMissingOrdinaryComponentAndNeverAddsVisits() throws Exception {
+    saveDatabaseFixture();reloadDatabasePosition(200,500);
+    assertTrue(commands.toString("UTF-8").contains("kata-analyze"));
+    assertFalse(helperCommands().contains("START"));
+    info(move("Q16",50,0.6));assertTrue(engine.isPondering());
+    assertEquals(50,engine.getWinrateStats().totalPlayouts);
+    info(move("Q16",200,0.6));assertFalse(engine.isPondering());
+    assertEquals(200,databaseVisits("normal"));assertEquals(1000,databaseVisits("pass"));
+  }
+
+  @Test public void databaseWaitsForAllComponentsBeforeFirstSave() throws Exception {
+    databaseFixture(100,4000,"gated");
+    info(move("Q16",100,0.6));
+    await(() -> Lizzie.board.getData().passAnalysisVisits>=1000);
+    assertEquals(0,databaseVisits("normal"));
+    java.nio.file.Files.createFile(java.nio.file.Paths.get(helperLog.toString()+".release"));
+    await(() -> Lizzie.board.getData().passAnalysisVisits>=4000);
+    assertEquals(100,databaseVisits("normal"));assertEquals(4000,databaseVisits("pass"));
+  }
+
+  @Test public void databaseRangeAndOptOutDoNotBlockNormalSearch() throws Exception {
+    databaseFixture(100,1000);
+    Lizzie.config.analysisDatabaseMaxMoves=0;
+    assertTrue(Lizzie.board.nextMove(false));
+    info(move("Q16",100,0.6));awaitPass();
+    assertFalse(java.nio.file.Files.exists(databaseFile));
+    Lizzie.config.analysisDatabaseEnabled=false;
+    assertTrue(Lizzie.board.previousMove(false));
+    engine.ponder();
+    assertTrue(commands.toString("UTF-8").contains("kata-analyze"));
+  }
+
+  @Test public void ignoreDatabaseForcesAnalysisInsteadOfRestoringCompletion() throws Exception {
+    saveDatabaseFixture();reloadDatabasePosition(100,1000);
+    commands.reset();engine.ignoreDatabaseForCurrentPosition();flushMainCommands();
+    assertTrue(commands.toString("UTF-8").contains("kata-analyze"));
+    assertEquals(0,Lizzie.board.getData().passAnalysisVisits);
+  }
+
+  @Test public void corruptDatabaseFallsBackToLiveAnalysis() throws Exception {
+    databaseFile=java.nio.file.Files.createTempFile("corrupt-opening-db",".sqlite3");
+    databaseModel=java.nio.file.Files.createTempFile("db-model",".bin");
+    java.nio.file.Files.write(databaseFile,"broken".getBytes("UTF-8"));
+    java.nio.file.Files.write(databaseModel,new byte[]{1,2,3});
+    databaseFixture(100,1000);
+    assertTrue(commands.toString("UTF-8").contains("kata-analyze"));
+    assertFalse(Lizzie.board.getData().databaseStatus.isEmpty());
+    assertEquals("broken",new String(java.nio.file.Files.readAllBytes(databaseFile),"UTF-8"));
+  }
+
+  @Test public void databaseAutomaticHitCompletesWithoutStartingEitherSearch() throws Exception {
+    saveDatabaseFixture();
+    engine.isKatago=false;
+    SGFParser.loadFromString("(;GM[1]FF[4]SZ[19])");
+    engine.isKatago=true;
+    Lizzie.config.isAutoAna=true; Lizzie.config.autoAnaPassValue=true;
+    Lizzie.config.autoAnaPassValueVisits=1000;
+    Lizzie.config.autoAnaPlayouts=100; Lizzie.config.autoAnaFirstPlayouts=-1;
+    Lizzie.config.autoAnaTime=-1; Lizzie.config.analyzeAllBranch=true;
+    Lizzie.config.anaBlack=Lizzie.config.anaWhite=true;
+    featurecat.lizzie.rules.BoardHistoryNode root=Lizzie.board.getHistory().getCurrentHistoryNode();
+    databaseFixture(100,1000);
+    await(() -> root.analyzed);
+    assertEquals(100,root.getData().getPlayouts());
+    assertEquals(1000,root.getData().passAnalysisVisits);
+    assertFalse(commands.toString("UTF-8").contains("kata-analyze"));
+    assertFalse(helperCommands().contains("START"));
+  }
+
+  @Test public void databaseHigherTargetRestartsOrdinarySearchAfterFullHit() throws Exception {
+    saveDatabaseFixture();reloadDatabasePosition(100,1000);
+    assertFalse(engine.isPondering());
+    Lizzie.config.limitPlayouts=200;commands.reset();
+    engine.ponder();flushMainCommands();
+    assertTrue(commands.toString("UTF-8").contains("kata-analyze"));
+    assertTrue(engine.isPondering());
+  }
+
+  @Test public void databaseLookupCannotRestoreIntoAnotherPosition() throws Exception {
+    saveDatabaseFixture();
+    java.util.concurrent.CountDownLatch release=new java.util.concurrent.CountDownLatch(1);
+    java.util.concurrent.Future<?> blocker=featurecat.lizzie.analysis.database.AnalysisDatabase.IO.submit(() -> {
+      try { release.await(10,java.util.concurrent.TimeUnit.SECONDS); }
+      catch(InterruptedException e){Thread.currentThread().interrupt();}
+    });
+    try {
+      engine.isKatago=false;
+      SGFParser.loadFromString("(;GM[1]FF[4]SZ[19];B[aa])");
+      engine.isKatago=true; engine.ponder();
+      assertTrue(Lizzie.board.nextMove(false));
+      release.countDown();blocker.get(10,java.util.concurrent.TimeUnit.SECONDS);
+      featurecat.lizzie.analysis.database.AnalysisDatabase.IO.submit(() -> {}).get(10,java.util.concurrent.TimeUnit.SECONDS);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(1,Lizzie.board.getData().moveNumber);
+      assertEquals(0,Lizzie.board.getData().getPlayouts());
+      assertEquals(0,Lizzie.board.getData().databaseNormalVisits);
+    } finally {release.countDown();}
+  }
+
+  @Test public void databaseSettingsPersistAndDialogRenders() throws Exception {
+    java.nio.file.Path configPath=new File("config.txt").toPath();
+    byte[] original=java.nio.file.Files.readAllBytes(configPath);
+    try {
+      databaseFile=java.nio.file.Files.createTempDirectory("db-settings").resolve("opening.sqlite3");
+      Lizzie.config.analysisDatabaseEnabled=true;
+      Lizzie.config.analysisDatabasePath=databaseFile.toString();
+      Lizzie.config.analysisDatabaseMaxMoves=32;
+      Lizzie.config.analysisDatabaseRead=false;
+      Lizzie.config.analysisDatabaseWrite=true;
+      Lizzie.config.analysisDatabaseSymmetries=false;
+      Lizzie.config.analysisDatabaseSkipSatisfied=false;
+      featurecat.lizzie.gui.AnalysisDatabaseSettings.save();
+      featurecat.lizzie.Config reloaded=new featurecat.lizzie.Config();
+      assertTrue(reloaded.analysisDatabaseEnabled);
+      assertEquals(databaseFile.toString(),reloaded.analysisDatabasePath);
+      assertEquals(32,reloaded.analysisDatabaseMaxMoves);
+      assertFalse(reloaded.analysisDatabaseRead);
+      assertTrue(reloaded.analysisDatabaseWrite);
+      assertFalse(reloaded.analysisDatabaseSymmetries);
+      assertFalse(reloaded.analysisDatabaseSkipSatisfied);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        javax.swing.Timer close=new javax.swing.Timer(350,e -> {
+          for(java.awt.Window w:java.awt.Window.getWindows()) if(w instanceof javax.swing.JDialog && w.isVisible()) {
+            try {
+              java.awt.image.BufferedImage shot=new java.awt.image.BufferedImage(w.getWidth(),w.getHeight(),java.awt.image.BufferedImage.TYPE_INT_RGB);
+              java.awt.Graphics2D g=shot.createGraphics();w.paint(g);g.dispose();
+              javax.imageio.ImageIO.write(shot,"png",new File("database-settings.png"));
+            } catch(Exception error){throw new RuntimeException(error);}
+            w.dispose();
+          }
+        });
+        close.setRepeats(false);close.start();
+        featurecat.lizzie.gui.AnalysisDatabaseSettings.show();
+      });
+    } finally {java.nio.file.Files.write(configPath,original);}
+  }
+
   @Test public void highVisitBadCandidateUsesThemeQualityNotVisitColor() throws Exception {
     Lizzie.config.analyzeSgfBranches = false;
     Lizzie.config.limitMaxSuggestion = 10;
@@ -1028,6 +1253,60 @@ public class BranchAnalysisIntegrationTest {
       process.destroy();
       if (reader != null) reader.join(5000);
     }
+  }
+
+  @Test public void realKataGoDatabaseSurvivesEngineAndPositionReload() throws Exception {
+    String binary=System.getProperty("katago.binary");Assume.assumeTrue(binary!=null);
+    String model=System.getProperty("katago.model"),config=System.getProperty("katago.config");
+    set("engineCommand","\""+binary+"\" gtp -model \""+model+"\" -config \""+config+"\"");
+    Field params=Leelaz.class.getDeclaredField("passParameters");params.setAccessible(true);
+    ((java.util.Map<?,?>)params.get(engine)).clear();
+    databaseFile=java.nio.file.Files.createTempDirectory("real-katago-database").resolve("analysis.sqlite3");
+    Lizzie.config.analysisDatabasePath=databaseFile.toString();
+    Lizzie.config.analysisDatabaseModel=Lizzie.config.analysisDatabaseConfig="";
+    Lizzie.config.analysisDatabaseRead=Lizzie.config.analysisDatabaseWrite=true;
+    Lizzie.config.analysisDatabaseSkipSatisfied=Lizzie.config.analysisDatabaseSymmetries=true;
+    Lizzie.config.analysisDatabaseMaxMoves=20;
+    Lizzie.config.analyzeSgfBranches=false;
+    Lizzie.config.analyzePassValue=true;Lizzie.config.passValueVisits=8;
+    Lizzie.config.limitPlayout=true;Lizzie.config.limitPlayouts=20;
+    for(int run=0;run<2;run++) {
+      engine.isKatago=false;SGFParser.loadFromString("(;GM[1]FF[4]SZ[19]KM[7.5])");engine.isKatago=true;
+      File log=new File("katago-database-"+run+"-stderr.log");
+      Process process=new ProcessBuilder(binary,"gtp","-model",model,"-config",config).redirectError(log).start();
+      Thread reader=null;
+      try {
+        set("process",process);set("inputStream",new BufferedReader(new InputStreamReader(process.getInputStream())));
+        set("outputStream",new BufferedOutputStream(process.getOutputStream()));
+        set("cmdQueue",new ArrayDeque<String>());set("cmdNumber",1);set("currentCmdNum",0);
+        set("outOfPlayoutsLimit",false);engine.isLoaded=true;
+        Method read=Leelaz.class.getDeclaredMethod("read");read.setAccessible(true);
+        reader=new Thread(() -> {try {read.invoke(engine);}catch(Exception e){throw new RuntimeException(e);}});
+        reader.setDaemon(true);reader.start();
+        if(run==0) {
+          set("recentRulesLine","");
+          engine.getParameterScadule(true);
+          await(() -> !engine.recentRulesLine.isEmpty());
+        }
+        Lizzie.config.analysisDatabaseEnabled=true;engine.ponder();
+        await(() -> !engine.isPondering() && Lizzie.board.getData().passAnalysisVisits>=8);
+        assertTrue(Lizzie.board.getData().getPlayouts()>=20);
+        assertTrue(databaseVisits("normal")>=20);assertTrue(databaseVisits("pass")>=8);
+        if(run==1) {
+          assertTrue(Lizzie.board.getData().databaseNormalVisits>=20);
+          assertTrue(Lizzie.board.getData().databasePassVisits>=8);
+          Field helper=Leelaz.class.getDeclaredField("passEngine");helper.setAccessible(true);
+          assertNull("Full hit must not launch a second KataGo",helper.get(engine));
+          String traffic=new String(java.nio.file.Files.readAllBytes(log.toPath()),"UTF-8");
+          assertFalse("Full hit must not start primary search",traffic.contains("Controller: kata-analyze"));
+        }
+      } finally {
+        Method close=Leelaz.class.getDeclaredMethod("closePassEngine");close.setAccessible(true);close.invoke(engine);
+        process.destroy();if(reader!=null)reader.join(5000);
+        Lizzie.config.analysisDatabaseEnabled=false;
+      }
+    }
+    System.out.println("Real KataGo database: persisted ordinary/pass results restored after engine and board reload without either search");
   }
 
   @Test public void realKataGoMeetsEveryBranchMinimum() throws Exception {
