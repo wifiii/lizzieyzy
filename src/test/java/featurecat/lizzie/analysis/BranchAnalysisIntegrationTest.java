@@ -356,6 +356,10 @@ public class BranchAnalysisIntegrationTest {
   }
 
   private void usePassHelper(String mode) throws Exception {
+    usePassHelper(mode, 1000);
+  }
+
+  private void usePassHelper(String mode, int minimum) throws Exception {
     helperLog = java.nio.file.Files.createTempFile("pass-gtp", ".log");
     String java = new File(System.getProperty("java.home"), "bin/java").getPath();
     String command = "\"" + java + "\" -cp \"" + System.getProperty("java.class.path")
@@ -363,7 +367,7 @@ public class BranchAnalysisIntegrationTest {
     set("engineCommand", command);
     Lizzie.config.analyzeSgfBranches = false;
     Lizzie.config.analyzePassValue = true;
-    Lizzie.config.passValueVisits = 1000;
+    Lizzie.config.passValueVisits = minimum;
     engine.refreshSgfBranchAnalysis();
     commands.reset();
   }
@@ -522,6 +526,22 @@ public class BranchAnalysisIntegrationTest {
       assertTrue(helperCommands().contains("play W pass"));
       assertEquals("+11.3", MoveValue.candidateText(find("Q16"), Lizzie.board.getData()));
     } finally { Lizzie.config.winrateAlwaysBlack = oldPerspective; }
+  }
+
+  @Test public void passValueUsesSameLeadingCandidateScoreAsManualPass() throws Exception {
+    assertTrue(Lizzie.board.nextMove(false)); // White to move.
+    usePassHelper("mixed", 10000);
+    info(move("Q16", 40000, 0.2).replace("scoreMean 2", "scoreMean -7.9"));
+    await(() -> Lizzie.board.getData().passAnalysisVisits >= 10000
+        && MoveValue.available(Lizzie.board.getData()));
+    assertEquals(10000, Lizzie.board.getData().passAnalysisVisits); // Excludes symmetry copies.
+    assertEquals(-22.8, Lizzie.board.getData().passAnalysisScore, 0.0001);
+    assertEquals(14.9, MoveValue.nextValue(Lizzie.board.getData().scoreMean,
+        Lizzie.board.getData().passAnalysisScore), 0.0001);
+    assertTrue(MoveValue.comment(Lizzie.board.getData()).contains("+14.9"));
+    // The old visit-weighted average was 21.6, producing the incorrect +13.7.
+    assertEquals(21.6, (22.8 * 7500 + 18 * 2500) / 10000, 0.0001);
+    assertEquals("+14.9", MoveValue.candidateText(find("Q16"), Lizzie.board.getData()));
   }
 
   @Test public void engineParameterChangeInvalidatesCachedPassValue() throws Exception {

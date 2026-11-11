@@ -34,6 +34,16 @@ public final class FakePassGtp {
             for (int visits : new int[] {250, 1000, 4000}) {
               Thread.sleep(150);
               if (generation.get() != token) return;
+              if (args.length > 1 && args[1].equals("mixed")) {
+                System.out.println("info move D4 visits 7500 winrate 0.9 scoreMean 22.8"
+                    + " scoreStdev 1 prior 0.1 order 0 pv D4"
+                    + " info move C3 visits 2500 winrate 0.8 scoreMean 18"
+                    + " scoreStdev 1 prior 0.1 order 1 pv C3"
+                    + " info move Q16 visits 7500 winrate 0.9 scoreMean 22.8"
+                    + " scoreStdev 1 prior 0.1 order 2 isSymmetryOf D4 pv Q16");
+                System.out.flush();
+                return;
+              }
               System.out.println("info move D4 visits " + visits
                   + " winrate 0.9 scoreMean 6.3 scoreStdev 1 prior 0.1 order 0 pv D4");
               System.out.flush();

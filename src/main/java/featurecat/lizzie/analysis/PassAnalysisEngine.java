@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis;
 import ch.ethz.ssh2.Connection;
 import ch.ethz.ssh2.Session;
 import featurecat.lizzie.util.Utils;
+import featurecat.lizzie.rules.BoardData;
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -154,15 +155,14 @@ public final class PassAnalysisEngine implements AutoCloseable {
         while (!closed && desired == request) {
           String line = poll();
           if (line == null || !line.startsWith("info ")) continue;
-          int visits = 0;
-          double weightedScore = 0;
-          for (String info : line.substring(5).split("ownership")[0].split(" info ")) {
-            MoveData move = MoveData.fromInfoKatago(info);
-            if (move.isSymmetry || move.playouts <= 0) continue;
-            visits += move.playouts;
-            weightedScore += move.scoreMean * move.playouts;
-          }
-          if (visits > 0 && desired == request) request.listener.result(visits, -weightedScore / visits);
+          List<MoveData> moves = new ArrayList<>();
+          for (String info : line.substring(5).split("ownership")[0].split(" info "))
+            moves.add(MoveData.fromInfoKatago(info));
+          int visits = MoveData.getPlayouts(moves);
+          // Match the main UI: use the first reported candidate's score, not an
+          // average over alternative moves. After pass the player to move is reversed.
+          double score = -BoardData.getScoreLeadFromBestMoves(moves);
+          if (visits > 0 && desired == request) request.listener.result(visits, score);
           if (visits >= request.minimum) break;
         }
         command("stop");
