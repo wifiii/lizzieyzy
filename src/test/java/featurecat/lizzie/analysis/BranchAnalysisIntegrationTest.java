@@ -376,10 +376,14 @@ public class BranchAnalysisIntegrationTest {
     info(move("D4", 600, 0.9).replace("scoreMean 2", "scoreMean 5.3")
         + " info " + move("C3", 400, 0.9).replace("scoreMean 2", "scoreMean 7.8")
         + " info " + move("Q16", 600, 0.9).replace("order 0", "order 2 isSymmetryOf D4"));
+    assertTrue(commands.toString("UTF-8").contains("stop\nundo\n"));
+    commands.reset();
+    info(move("Q16", 6000, 0.6).replace("scoreMean 2", "scoreMean 5"));
+    assertFalse(commands.toString("UTF-8").contains("play B pass"));
+    assertFalse(commands.toString("UTF-8").contains("undo"));
     assertEquals(1000, Lizzie.board.getData().passAnalysisVisits);
     assertEquals(-6.3, Lizzie.board.getData().passAnalysisScore, 0.0001);
     assertEquals(5.0, Lizzie.board.getData().scoreMean, 0);
-    assertTrue(commands.toString("UTF-8").contains("stop\nundo\n"));
     assertSame(node, Lizzie.board.getHistory().getCurrentHistoryNode());
     assertEquals(1, engine.getBestMoves().size());
     assertEquals("Q16", engine.getBestMoves().get(0).coordinate);
@@ -393,6 +397,28 @@ public class BranchAnalysisIntegrationTest {
     Lizzie.config.analyzePassValue = true;
     set("searchSliceStarted", 0L);
     info(move("Q16", 5000, 0.6));
+  }
+
+  @Test public void passCommandIdStaysWithinKataGo182NineDigitLimit() throws Exception {
+    set("passCommandId", 999999999);
+    startPassSearch();
+    assertTrue(commands.toString("UTF-8").contains("1 play B pass\n"));
+    acknowledgePass();
+    engine.sendCommand("stop");
+  }
+
+  @Test public void unnumberedIdErrorCancelsPendingPassWithoutUndoOrRetry() throws Exception {
+    startPassSearch();
+    commands.reset();
+    line("? GTP id '0' could not be parsed: Could not parse digits, overflow: 1000000001");
+    Field pending = Leelaz.class.getDeclaredField("passAwaitingAck");
+    pending.setAccessible(true);
+    assertFalse(pending.getBoolean(engine));
+    assertFalse(commands.toString("UTF-8").contains("undo"));
+    info(move("Q16", 6000, 0.6));
+    assertFalse(commands.toString("UTF-8").contains("play B pass"));
+    engine.sendCommand("play B D4");
+    assertTrue(commands.toString("UTF-8").contains("play B D4"));
   }
 
   @Test public void cancellingPendingPassWaitsForSuccessBeforeUndoAndUserMove() throws Exception {

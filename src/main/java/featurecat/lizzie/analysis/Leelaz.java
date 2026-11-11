@@ -72,7 +72,8 @@ public class Leelaz {
   private long passSliceStarted;
   private boolean passPositionActive;
   private boolean passAwaitingAck;
-  private int passCommandId = 1000000000;
+  // KataGo 1.18.2 rejects GTP IDs longer than nine digits.
+  private int passCommandId;
   private final List<Runnable> passDeferredCommands = new ArrayList<>();
   private String branchAnalysisContext = "";
   private boolean branchUsesNodeCache;
@@ -1180,10 +1181,15 @@ public class Leelaz {
   private void parseLine(String line) {
     // System.out.println(line);
     synchronized (this) {
+      boolean invalidPassId = passAwaitingAck && line.startsWith("? GTP id '")
+          && line.contains("could not be parsed");
       if (passAwaitingAck && (line.equals("=" + passCommandId)
           || line.startsWith("=" + passCommandId + " ")
-          || line.equals("?" + passCommandId) || line.startsWith("?" + passCommandId + " "))) {
-        isCommandLine = true;
+          || line.equals("?" + passCommandId) || line.startsWith("?" + passCommandId + " ")
+          || invalidPassId)) {
+        // KataGo omits the blank response terminator on an invalid command ID.
+        isCommandLine = !invalidPassId;
+        if (invalidPassId) currentCmdNum = Math.min(currentCmdNum + 1, cmdNumber - 1);
         passAwaitingAck = false;
         passPositionActive = line.startsWith("=");
         if (!passPositionActive) branchSearchRejected = true;
@@ -3120,7 +3126,7 @@ public class Leelaz {
     if (kind.equals("pass")) {
       passSliceStarted = searchSliceStarted;
       passAwaitingAck = true;
-      passCommandId++;
+      passCommandId = passCommandId >= 999999999 ? 1 : passCommandId + 1;
       sendBranchCommand(passCommandId + " play "
           + (Lizzie.board.getData().blackToPlay ? "B" : "W") + " pass");
     } else {
