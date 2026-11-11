@@ -12,6 +12,8 @@ import org.junit.*;
 public class BranchAnalysisIntegrationTest {
   private Leelaz engine;
   private ByteArrayOutputStream commands;
+  private String originalEngineCommand;
+  private java.nio.file.Path helperLog;
 
   @BeforeClass public static void startUi() throws Exception {
     Assume.assumeTrue(System.getenv("DISPLAY") != null);
@@ -27,19 +29,8 @@ public class BranchAnalysisIntegrationTest {
   }
 
   private void info(String moves) throws Exception {
-    acknowledgePass();
     engine.setResponseUpToDate();
     line("info " + moves);
-  }
-
-  private void acknowledgePass() throws Exception {
-    Field pending = Leelaz.class.getDeclaredField("passAwaitingAck");
-    pending.setAccessible(true);
-    if (pending.getBoolean(engine)) {
-      Field id = Leelaz.class.getDeclaredField("passCommandId");
-      id.setAccessible(true);
-      line("=" + id.getInt(engine));
-    }
   }
 
   private void line(String text) throws Exception {
@@ -55,6 +46,7 @@ public class BranchAnalysisIntegrationTest {
 
   @Before public void setupPosition() throws Exception {
     engine = Lizzie.leelaz;
+    originalEngineCommand = engine.engineCommand();
     Lizzie.config.enableLizzieCache = true;
     Lizzie.config.supplementCandidates = false;
     Lizzie.config.analyzePassValue = false;
@@ -218,12 +210,11 @@ public class BranchAnalysisIntegrationTest {
     assertTrue(commands.toString("UTF-8").contains("allow B A19 1"));
   }
 
-  @Test public void branchAnalysisHasPriorityOverPassAndNormalLimits() throws Exception {
+  @Test public void branchAnalysisHasPriorityOverNormalLimits() throws Exception {
     Lizzie.config.analyzePassValue = true;
     Lizzie.config.passValueVisits = 2000;
     Lizzie.config.limitPlayout = true;
     Lizzie.config.limitPlayouts = 10000;
-    set("searchSliceStarted", 0L);
     info(move("Q16", 50, 0.6));
     assertTrue(commands.toString("UTF-8").contains("allow B A19 1"));
     assertFalse(commands.toString("UTF-8").contains("allow B pass 1"));
@@ -357,170 +348,192 @@ public class BranchAnalysisIntegrationTest {
     assertEquals(361, engine.getBestMoves().size());
   }
 
-  @Test public void passSearchUsesSeparatePositionAndDoesNotCorruptNormalStatistics() throws Exception {
+  @After public void closeHelper() throws Exception {
+    Method close = Leelaz.class.getDeclaredMethod("closePassEngine");
+    close.setAccessible(true);
+    close.invoke(engine);
+    set("engineCommand", originalEngineCommand);
+  }
+
+  private void usePassHelper(String mode) throws Exception {
+    helperLog = java.nio.file.Files.createTempFile("pass-gtp", ".log");
+    String java = new File(System.getProperty("java.home"), "bin/java").getPath();
+    String command = "\"" + java + "\" -cp \"" + System.getProperty("java.class.path")
+        + "\" featurecat.lizzie.analysis.FakePassGtp \"" + helperLog + "\" " + mode;
+    set("engineCommand", command);
     Lizzie.config.analyzeSgfBranches = false;
     Lizzie.config.analyzePassValue = true;
     Lizzie.config.passValueVisits = 1000;
-    Object node = Lizzie.board.getHistory().getCurrentHistoryNode();
-    set("searchSliceStarted", 0L);
-    info(move("Q16", 5000, 0.6).replace("scoreMean 2", "scoreMean 5"));
-    assertTrue(commands.toString("UTF-8").contains("play B pass"));
-    assertFalse(commands.toString("UTF-8").contains("focus"));
-    assertFalse(commands.toString("UTF-8").contains("allow"));
-    acknowledgePass();
-    assertTrue(commands.toString("UTF-8").contains("kata-analyze W "));
-    info(move("D4", 250, 0.9).replace("scoreMean 2", "scoreMean 6.3"));
-    assertEquals(250, Lizzie.board.getData().passAnalysisVisits);
-    assertEquals(-6.3, Lizzie.board.getData().passAnalysisScore, 0.0001);
-    assertFalse(commands.toString("UTF-8").contains("undo"));
-    info(move("D4", 600, 0.9).replace("scoreMean 2", "scoreMean 5.3")
-        + " info " + move("C3", 400, 0.9).replace("scoreMean 2", "scoreMean 7.8")
-        + " info " + move("Q16", 600, 0.9).replace("order 0", "order 2 isSymmetryOf D4"));
-    assertTrue(commands.toString("UTF-8").contains("stop\nundo\n"));
+    engine.refreshSgfBranchAnalysis();
     commands.reset();
+  }
+
+  private String helperCommands() throws Exception {
+    return new String(java.nio.file.Files.readAllBytes(helperLog), "UTF-8");
+  }
+
+  private void await(java.util.concurrent.Callable<Boolean> condition) throws Exception {
+    long deadline = System.currentTimeMillis() + 10000;
+    while (System.currentTimeMillis() < deadline) {
+      synchronized (engine) { if (condition.call()) return; }
+      Thread.sleep(25);
+    }
+    fail("Timed out waiting for pass helper");
+  }
+
+  private void awaitPass() throws Exception {
+    await(() -> Lizzie.board.getData().passAnalysisVisits >= 1000
+        && MoveValue.available(Lizzie.board.getData()));
+  }
+
+  @Test public void privatePassEngineRunsAlongsideOrdinarySearchWithoutMainPlayOrUndo() throws Exception {
+    usePassHelper("normal");
+    Object node = Lizzie.board.getHistory().getCurrentHistoryNode();
+    info(move("Q16", 5000, 0.6).replace("scoreMean 2", "scoreMean 5"));
     info(move("Q16", 6000, 0.6).replace("scoreMean 2", "scoreMean 5"));
+    assertEquals(6000, engine.getBestMoves().get(0).playouts);
+    awaitPass();
+    assertTrue(helperCommands().contains("play B pass"));
+    assertTrue(helperCommands().contains("kata-analyze W"));
     assertFalse(commands.toString("UTF-8").contains("play B pass"));
     assertFalse(commands.toString("UTF-8").contains("undo"));
-    assertEquals(1000, Lizzie.board.getData().passAnalysisVisits);
-    assertEquals(-6.3, Lizzie.board.getData().passAnalysisScore, 0.0001);
-    assertEquals(5.0, Lizzie.board.getData().scoreMean, 0);
+    assertFalse(commands.toString("UTF-8").contains("stop"));
     assertSame(node, Lizzie.board.getHistory().getCurrentHistoryNode());
     assertEquals(1, engine.getBestMoves().size());
-    assertEquals("Q16", engine.getBestMoves().get(0).coordinate);
+    assertEquals(5, Lizzie.board.getData().scoreMean, 0);
+    assertEquals(-6.3, Lizzie.board.getData().passAnalysisScore, 0.0001);
     assertTrue(MoveValue.comment(Lizzie.board.getData()).contains("+11.3"));
-    MoveData candidate = MoveData.fromInfoKatago(move("D4", 200, 0.5).replace("scoreMean 2", "scoreMean 3"));
-    assertEquals("+9.3", MoveValue.candidateText(candidate, Lizzie.board.getData()));
+    info(move("Q16", 7000, 0.6));
+    assertEquals(1, helperCommands().split("play B pass", -1).length - 1);
   }
 
-  private void startPassSearch() throws Exception {
-    Lizzie.config.analyzeSgfBranches = false;
-    Lizzie.config.analyzePassValue = true;
-    set("searchSliceStarted", 0L);
-    info(move("Q16", 5000, 0.6));
-  }
-
-  @Test public void passCommandIdStaysWithinKataGo182NineDigitLimit() throws Exception {
-    set("passCommandId", 999999999);
-    startPassSearch();
-    assertTrue(commands.toString("UTF-8").contains("1 play B pass\n"));
-    acknowledgePass();
-    engine.sendCommand("stop");
-  }
-
-  @Test public void unnumberedIdErrorCancelsPendingPassWithoutUndoOrRetry() throws Exception {
-    startPassSearch();
-    commands.reset();
-    line("? GTP id '0' could not be parsed: Could not parse digits, overflow: 1000000001");
-    Field pending = Leelaz.class.getDeclaredField("passAwaitingAck");
-    pending.setAccessible(true);
-    assertFalse(pending.getBoolean(engine));
-    assertFalse(commands.toString("UTF-8").contains("undo"));
-    info(move("Q16", 6000, 0.6));
-    assertFalse(commands.toString("UTF-8").contains("play B pass"));
-    engine.sendCommand("play B D4");
-    assertTrue(commands.toString("UTF-8").contains("play B D4"));
-  }
-
-  @Test public void cancellingPendingPassWaitsForSuccessBeforeUndoAndUserMove() throws Exception {
-    startPassSearch();
-    commands.reset();
-    engine.sendCommand("play B D4");
-    assertEquals("", commands.toString("UTF-8"));
-    acknowledgePass();
-    String sent = commands.toString("UTF-8");
-    assertTrue(sent.contains("stop\nundo\nplay B D4\n"));
-    assertFalse(sent.contains("kata-analyze W"));
-    commands.reset();
-    engine.sendCommand("stop");
-    assertFalse(commands.toString("UTF-8").contains("undo"));
-  }
-
-  @Test public void failedPassNeverUndoesTheOriginalPosition() throws Exception {
-    startPassSearch();
-    engine.sendCommand("play B D4");
-    Field id = Leelaz.class.getDeclaredField("passCommandId");
-    id.setAccessible(true);
-    commands.reset();
-    line("?" + id.getInt(engine) + " cannot play");
-    assertTrue(commands.toString("UTF-8").contains("play B D4"));
-    assertFalse(commands.toString("UTF-8").contains("undo"));
-    assertFalse(commands.toString("UTF-8").contains("kata-analyze W"));
-  }
-
-  @Test public void cancellingActivePassRestoresBeforeNavigationAndRejectsLateOutput() throws Exception {
-    startPassSearch();
-    acknowledgePass();
-    commands.reset();
+  @Test public void helperReusesOneProcessAcrossPositionsAndDropsOldResults() throws Exception {
+    usePassHelper("normal");
+    await(() -> helperCommands().contains("kata-analyze W"));
+    Object old = Lizzie.board.getHistory().getCurrentHistoryNode();
     assertTrue(Lizzie.board.nextMove(false));
-    String sent = commands.toString("UTF-8");
-    assertTrue(sent.contains("stop\nundo\nplay B A19\n"));
-    line("info " + move("D4", 9999, 0.9));
-    assertEquals(0, Lizzie.board.getData().passAnalysisVisits);
+    info(move("Q16", 50, 0.6));
+    awaitPass();
+    assertNotSame(old, Lizzie.board.getHistory().getCurrentHistoryNode());
+    String log = helperCommands();
+    assertEquals(1, log.split("START", -1).length - 1);
+    assertTrue(log.contains("play B A19"));
+    assertTrue(log.contains("play W pass"));
+    assertTrue(log.contains("kata-analyze B"));
+    assertEquals(-6.3, Lizzie.board.getData().passAnalysisScore, 0.0001);
   }
 
-  @Test public void passAnalyzeErrorRestoresTheOriginalPosition() throws Exception {
-    startPassSearch();
-    acknowledgePass();
-    commands.reset();
-    line("? cannot analyze");
-    assertTrue(commands.toString("UTF-8").contains("stop\nundo\n"));
-    // Ordinary analysis may be queued until stop/undo responses have arrived.
-    engine.setResponseUpToDate();
-    Method flush = Leelaz.class.getDeclaredMethod("trySendCommandFromQueue");
-    flush.setAccessible(true);
-    flush.invoke(engine);
-    assertTrue(commands.toString("UTF-8").contains("kata-analyze "));
-    assertFalse(commands.toString("UTF-8").contains("kata-analyze W "));
-    assertEquals(0, Lizzie.board.getData().passAnalysisVisits);
+  @Test public void helperPassCanFinishAfterOrdinaryVisitLimit() throws Exception {
+    usePassHelper("normal");
+    Lizzie.config.limitPlayout = true;
+    Lizzie.config.limitPlayouts = 100;
+    info(move("Q16", 100, 0.6));
+    assertFalse(engine.isPondering());
+    awaitPass();
+    assertEquals(100, engine.getBestMoves().get(0).playouts);
   }
 
-  @Test public void changingPassOptionsRestoresTheOriginalPosition() throws Exception {
-    startPassSearch();
-    acknowledgePass();
-    commands.reset();
+  @Test public void helperWorksWhileMainEngineFillsSgfBranches() throws Exception {
+    usePassHelper("normal");
+    Lizzie.config.analyzeSgfBranches = true;
+    info(move("Q16", 5000, 0.6));
+    assertTrue(commands.toString("UTF-8").contains("allow B A19 1"));
+    awaitPass();
+    assertEquals("Q16", engine.getBestMoves().get(0).coordinate);
+    assertFalse(commands.toString("UTF-8").contains("play B pass"));
+  }
+
+  @Test public void helperFailureDoesNotInterruptMainOrRepeatedlyRestart() throws Exception {
+    usePassHelper("fail");
+    await(() -> helperCommands().contains("kata-analyze"));
+    for (int i = 0; i < 20; i++) info(move("Q16", 5000 + i, 0.6));
+    Thread.sleep(300);
+    assertEquals(1, helperCommands().split("START", -1).length - 1);
+    assertTrue(engine.isPondering());
+    assertEquals(5019, engine.getBestMoves().get(0).playouts);
+    assertFalse(commands.toString("UTF-8").contains("stop"));
+  }
+
+  @Test public void disablingPassStopsOnlyTheHelper() throws Exception {
+    usePassHelper("normal");
+    await(() -> helperCommands().contains("kata-analyze"));
     Lizzie.config.analyzePassValue = false;
     engine.refreshSgfBranchAnalysis();
-    assertTrue(commands.toString("UTF-8").contains("stop\nundo\n"));
-    // Ordinary analysis may be queued until stop/undo responses have arrived.
-    engine.setResponseUpToDate();
-    Method flush = Leelaz.class.getDeclaredMethod("trySendCommandFromQueue");
-    flush.setAccessible(true);
-    flush.invoke(engine);
-    assertTrue(commands.toString("UTF-8").contains("kata-analyze "));
-    assertFalse(commands.toString("UTF-8").contains("kata-analyze W "));
+    Thread.sleep(400);
+    assertEquals(0, Lizzie.board.getData().passAnalysisVisits);
+    assertTrue(engine.isPondering());
+    assertFalse(commands.toString("UTF-8").contains("undo"));
   }
 
-  @Test public void passProgressIsNotReusedAtAnotherPosition() throws Exception {
-    passSearchUsesSeparatePositionAndDoesNotCorruptNormalStatistics();
-    assertTrue(Lizzie.board.nextMove(false));
-    assertFalse(MoveValue.available(Lizzie.board.getData()));
+  @Test public void manualPauseStopsHelperSearchAndResumeReusesItsProcess() throws Exception {
+    usePassHelper("normal");
+    await(() -> helperCommands().contains("kata-analyze"));
+    engine.togglePonder();
+    Thread.sleep(400);
+    assertEquals(0, Lizzie.board.getData().passAnalysisVisits);
+    assertFalse(engine.isPondering());
+    engine.togglePonder();
+    awaitPass();
+    assertEquals(1, helperCommands().split("START", -1).length - 1);
+    assertTrue(engine.isPondering());
+  }
+
+  @Test public void helperReplaysSetupStonesHistoryPassKomiAndBoardSize() throws Exception {
+    engine.isKatago = false;
+    SGFParser.loadFromString("(;GM[1]FF[4]SZ[9]KM[7.5]AB[aa][bb]AW[cc];B[dd];W[])");
+    while (Lizzie.board.nextMove(false)) {}
+    engine.isKatago = true;
+    usePassHelper("normal");
+    awaitPass();
+    String log = helperCommands();
+    assertTrue(log.contains("boardsize 9"));
+    assertTrue(log.contains("komi 7.5"));
+    assertTrue(log.contains("play B A9"));
+    assertTrue(log.contains("play B B8"));
+    assertTrue(log.contains("play W C7"));
+    assertTrue(log.contains("play B D6"));
+    assertTrue(log.contains("play W pass"));
+    assertTrue(log.contains("play B pass"));
+  }
+
+  @Test public void closingHelperTerminatesOnlyItsOwnProcess() throws Exception {
+    usePassHelper("normal");
+    awaitPass();
+    Field field = Leelaz.class.getDeclaredField("passEngine");
+    field.setAccessible(true);
+    Object helper = field.get(engine);
+    Field child = PassAnalysisEngine.class.getDeclaredField("process");
+    child.setAccessible(true);
+    Process process = (Process) child.get(helper);
+    assertTrue(process.isAlive());
+    closeHelper();
+    await(() -> !process.isAlive());
+    assertTrue(engine.isPondering());
   }
 
   @Test public void whiteToMoveUsesTheSameValueSignEvenInBlackWinrateDisplay() throws Exception {
     assertTrue(Lizzie.board.nextMove(false));
-    assertFalse(Lizzie.board.getData().blackToPlay);
     boolean oldPerspective = Lizzie.config.winrateAlwaysBlack;
     try {
       Lizzie.config.winrateAlwaysBlack = true;
-      Lizzie.config.analyzeSgfBranches = false;
-      Lizzie.config.analyzePassValue = true;
-      Lizzie.config.passValueVisits = 1000;
-      engine.refreshSgfBranchAnalysis();
-      set("searchSliceStarted", 0L);
-      commands.reset();
+      usePassHelper("normal");
       info(move("Q16", 5000, 0.6).replace("scoreMean 2", "scoreMean 5"));
-      assertTrue(commands.toString("UTF-8").contains("play W pass"));
-      assertFalse(commands.toString("UTF-8").contains("allow"));
-      info(move("D4", 1000, 0.9).replace("scoreMean 2", "scoreMean 6.3"));
+      awaitPass();
+      assertTrue(helperCommands().contains("play W pass"));
       assertEquals("+11.3", MoveValue.candidateText(find("Q16"), Lizzie.board.getData()));
     } finally { Lizzie.config.winrateAlwaysBlack = oldPerspective; }
   }
 
   @Test public void engineParameterChangeInvalidatesCachedPassValue() throws Exception {
-    passSearchUsesSeparatePositionAndDoesNotCorruptNormalStatistics();
+    usePassHelper("normal");
+    awaitPass();
     assertTrue(MoveValue.available(Lizzie.board.getData()));
     engine.sendCommand("kata-set-param analysisWideRootNoise 0.05");
     assertFalse(MoveValue.available(Lizzie.board.getData()));
+    info(move("Q16", 5000, 0.6));
+    awaitPass();
+    assertTrue(helperCommands().contains("kata-set-param analysisWideRootNoise 0.05"));
+    assertEquals(1, helperCommands().split("START", -1).length - 1);
   }
 
   @Test public void highVisitBadCandidateUsesThemeQualityNotVisitColor() throws Exception {
@@ -760,6 +773,9 @@ public class BranchAnalysisIntegrationTest {
     Process process = new ProcessBuilder(binary, "gtp", "-model",
         System.getProperty("katago.model"), "-config", System.getProperty("katago.config"))
         .redirectError(new File("katago-test-stderr.log")).start();
+    set("engineCommand", "\"" + binary + "\" gtp -model \""
+        + System.getProperty("katago.model") + "\" -config \""
+        + System.getProperty("katago.config") + "\"");
     Thread reader = null;
     try {
       set("process", process);
@@ -809,6 +825,21 @@ public class BranchAnalysisIntegrationTest {
         Thread.sleep(100);
       }
       assertTrue("Real KataGo did not complete all SGF branches; inspect katago-test-stderr.log", complete);
+      if (extended) {
+        Field helperField = Leelaz.class.getDeclaredField("passEngine");
+        helperField.setAccessible(true);
+        Object helper = helperField.get(engine);
+        assertNotNull(helper);
+        Field childField = PassAnalysisEngine.class.getDeclaredField("process");
+        childField.setAccessible(true);
+        Process child = (Process) childField.get(helper);
+        assertNotSame(process, child);
+        assertTrue(process.isAlive());
+        assertTrue(child.isAlive());
+        String primaryLog = new String(java.nio.file.Files.readAllBytes(
+            new File("katago-test-stderr.log").toPath()), "UTF-8");
+        assertFalse(primaryLog.contains("Controller: play B pass"));
+      }
       System.out.println(extended
           ? "Real KataGo: normal limit, pass value, all branches and limited candidates completed"
           : "Real KataGo: A19, B18 and pass each reached >=8 visits");
