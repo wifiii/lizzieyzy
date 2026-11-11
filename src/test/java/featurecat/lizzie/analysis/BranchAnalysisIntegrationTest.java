@@ -216,9 +216,11 @@ public class BranchAnalysisIntegrationTest {
     info(move("Q16", 50, 0.6));
     assertTrue(commands.toString("UTF-8").contains("allow B A19 1"));
     assertFalse(commands.toString("UTF-8").contains("allow B pass 1"));
+    assertFalse(commands.toString("UTF-8").contains("focus pass 1"));
     info(move("A19", 1000, 0.5));
     assertTrue(commands.toString("UTF-8").contains("allow B B18 1"));
     assertFalse(commands.toString("UTF-8").contains("allow B pass 1"));
+    assertFalse(commands.toString("UTF-8").contains("focus pass 1"));
   }
 
   @Test public void symmetryCopiesOfVisibleSourcesRetainTheirStatistics() throws Exception {
@@ -350,10 +352,12 @@ public class BranchAnalysisIntegrationTest {
     Lizzie.config.passValueVisits = 1000;
     set("searchSliceStarted", 0L);
     info(move("Q16", 5000, 0.6).replace("scoreMean 2", "scoreMean 5"));
-    assertTrue(commands.toString("UTF-8").contains("allow B pass 1"));
+    assertTrue(commands.toString("UTF-8").contains("focus pass 1"));
+    assertFalse(commands.toString("UTF-8").contains("allow"));
     set("searchSliceStarted", 0L);
     set("passSliceStarted", System.currentTimeMillis() - 600);
-    info(move("pass", 250, 0.1).replace("scoreMean 2", "scoreMean -6.3"));
+    info(move("Q16", 9000, 0.9).replace("scoreMean 2", "scoreMean 20")
+        + " info " + move("pass", 250, 0.1).replace("scoreMean 2", "scoreMean -6.3"));
     assertEquals(250, Lizzie.board.getData().passAnalysisVisits);
     assertEquals(5.0, Lizzie.board.getData().scoreMean, 0);
     assertEquals(11.3, MoveValue.nextValue(Lizzie.board.getData().scoreMean,
@@ -389,7 +393,8 @@ public class BranchAnalysisIntegrationTest {
       set("searchSliceStarted", 0L);
       commands.reset();
       info(move("Q16", 5000, 0.6).replace("scoreMean 2", "scoreMean 5"));
-      assertTrue(commands.toString("UTF-8").contains("allow W pass 1"));
+      assertTrue(commands.toString("UTF-8").contains("focus pass 1"));
+      assertFalse(commands.toString("UTF-8").contains("allow"));
       info(move("pass", 1000, 0.1).replace("scoreMean 2", "scoreMean -6.3"));
       assertEquals("+11.3", MoveValue.candidateText(find("Q16"), Lizzie.board.getData()));
     } finally { Lizzie.config.winrateAlwaysBlack = oldPerspective; }

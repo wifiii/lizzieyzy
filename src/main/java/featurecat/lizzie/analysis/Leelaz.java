@@ -3076,8 +3076,11 @@ public class Leelaz {
     branchAnalysis.start(target);
     searchSliceStarted = System.currentTimeMillis();
     if (kind.equals("pass")) passSliceStarted = searchSliceStarted;
-    sendBranchCommand(normalAnalyzeCommand() + " allow "
-        + (Lizzie.board.getData().blackToPlay ? "B" : "W") + " " + target + " 1");
+    // Focus adds visits to pass without restricting the root to pass alone.
+    String restriction = kind.equals("pass") ? " focus pass 1"
+        : " allow " + (Lizzie.board.getData().blackToPlay ? "B" : "W")
+            + " " + target + " 1";
+    sendBranchCommand(normalAnalyzeCommand() + restriction);
   }
 
   private boolean normalLimitReached() {
