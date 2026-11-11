@@ -7,6 +7,8 @@ import java.util.Locale;
 
 /** All scores here are from the player to move's perspective, including a pass child. */
 public final class MoveValue {
+  public static final String SAVED_VALUE_PROPERTY = "LZNV";
+
   private MoveValue() {}
 
   public static double nextValue(double ordinaryScore, double passScore) {
@@ -30,7 +32,11 @@ public final class MoveValue {
   }
 
   public static String comment(BoardData data) {
-    if (!available(data)) return Lizzie.resourceBundle.getString("MoveValue.pending");
+    if (!available(data)) {
+      String saved = data.getProperty(SAVED_VALUE_PROPERTY);
+      if (saved != null && Lizzie.leelaz != null && !Lizzie.leelaz.isPassValueEnabled()) return saved;
+      return Lizzie.resourceBundle.getString("MoveValue.pending");
+    }
     return String.format(Locale.ENGLISH, Lizzie.resourceBundle.getString("MoveValue.comment"),
         nextValue(data.scoreMean, data.passAnalysisScore), Utils.getPlayoutsString(data.passAnalysisVisits));
   }

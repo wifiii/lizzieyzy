@@ -45,6 +45,8 @@ public class StartAnaDialog extends JDialog {
   private JCheckBox chkUseDiff;
   private JCheckBox chkExitByPause;
   private boolean isAnalysisMode = false;
+  private JCheckBox chkPassValue;
+  private JTextField txtPassValueVisits;
 
   public StartAnaDialog(boolean isAnalysisMode, Window owner) {
     super(owner);
@@ -91,7 +93,7 @@ public class StartAnaDialog extends JDialog {
 
   private void initContentPanel() {
     GridLayout gridLayout =
-        new GridLayout(isAnalysisMode ? 4 : Lizzie.frame.isBatchAna ? 10 : 11, 2, 4, 4);
+        new GridLayout(isAnalysisMode ? 4 : Lizzie.frame.isBatchAna ? 12 : 13, 2, 4, 4);
     contentPanel.setLayout(gridLayout);
 
     //  checkBoxPlayerIsBlack =
@@ -170,6 +172,18 @@ public class StartAnaDialog extends JDialog {
       contentPanel.add(chkAnalyzeAllBracnh);
     }
     if (!isAnalysisMode) {
+      chkPassValue = new JFontCheckBox();
+      chkPassValue.setSelected(Lizzie.config.autoAnaPassValue);
+      txtPassValueVisits = new JTextField(String.valueOf(Lizzie.config.autoAnaPassValueVisits));
+      txtPassValueVisits.setDocument(new IntDocument());
+      txtPassValueVisits.setText(String.valueOf(Lizzie.config.autoAnaPassValueVisits));
+      txtPassValueVisits.setFont(new Font(Config.sysDefaultFontName, Font.PLAIN, Config.frameFontSize));
+      txtPassValueVisits.setEnabled(chkPassValue.isSelected());
+      chkPassValue.addActionListener(e -> txtPassValueVisits.setEnabled(chkPassValue.isSelected()));
+      contentPanel.add(new JFontLabel(Lizzie.resourceBundle.getString("StartAnaDialog.analyzePassValue")));
+      contentPanel.add(chkPassValue);
+      contentPanel.add(new JFontLabel(Lizzie.resourceBundle.getString("StartAnaDialog.passValueVisits")));
+      contentPanel.add(txtPassValueVisits);
       contentPanel.add(
           new JFontLabel(
               Lizzie.resourceBundle.getString("StartAnaDialog.lblDiffAnalyze"))); // 波动过大时加强分析
@@ -277,6 +291,29 @@ public class StartAnaDialog extends JDialog {
     LizzieFrame.toolbar.stopAutoAna(true, true);
   }
 
+  private boolean applyPassSettings() {
+    if (isAnalysisMode) return true;
+    int visits = Lizzie.config.autoAnaPassValueVisits;
+    if (chkPassValue.isSelected()) {
+      if (!Lizzie.leelaz.isKatago || Lizzie.config.isDoubleEngineMode()) {
+        Utils.showMsg(Lizzie.resourceBundle.getString("StartAnaDialog.passRequiresKataGo"));
+        return false;
+      }
+      try {
+        visits = Integer.parseInt(txtPassValueVisits.getText().trim());
+        if (visits <= 0) throw new NumberFormatException();
+      } catch (NumberFormatException ex) {
+        Utils.showMsg(Lizzie.resourceBundle.getString("StartAnaDialog.invalidPassVisits"));
+        return false;
+      }
+    }
+    Lizzie.config.autoAnaPassValue = chkPassValue.isSelected();
+    Lizzie.config.autoAnaPassValueVisits = visits;
+    Lizzie.config.uiConfig.put("auto-ana-pass-value", Lizzie.config.autoAnaPassValue);
+    Lizzie.config.uiConfig.put("auto-ana-pass-value-visits", visits);
+    return true;
+  }
+
   public void apply() {
     if (chkExitByPause != null) {
       Lizzie.config.exitAutoAnalyzeByPause = chkExitByPause.isSelected();
@@ -332,6 +369,7 @@ public class StartAnaDialog extends JDialog {
       }
     }
 
+    if (!applyPassSettings()) return;
     Lizzie.leelaz.nameCmd();
     cancelled = false;
     this.setVisible(false);

@@ -166,6 +166,8 @@ public class Config {
   public volatile int candidateMinVisits = 200;
   public volatile boolean analyzePassValue = false;
   public volatile int passValueVisits = 1000;
+  public volatile boolean autoAnaPassValue = false;
+  public volatile int autoAnaPassValueVisits = 1000;
   public volatile boolean showMoveValue = false;
   public volatile boolean analyzeSgfBranches = false;
   public volatile int sgfBranchMinVisits = 1000;
@@ -1090,6 +1092,8 @@ public class Config {
     independentSubBoardTop = uiConfig.optBoolean("independent-sub-board-top", false);
 
     analyzeAllBranch = uiConfig.optBoolean("analyze-all-branch", false);
+    autoAnaPassValue = uiConfig.optBoolean("auto-ana-pass-value", false);
+    autoAnaPassValueVisits = Math.max(1, uiConfig.optInt("auto-ana-pass-value-visits", 1000));
 
     // autoInterval = uiConfig.optInt("autosave-interval-millseconds", -1);
     autoResume = uiConfig.optBoolean("resume-previous-game", false);

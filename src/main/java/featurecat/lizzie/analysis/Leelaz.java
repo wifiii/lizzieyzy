@@ -1722,6 +1722,7 @@ public class Leelaz {
   private void nofityDiffAna() {
     // TODO Auto-generated method stub
     if (this != Lizzie.leelaz) return;
+    if (!autoPassReady()) return;
     if (Lizzie.config.autoAnaDiffFirstPlayouts > 0) {
       if (!bestMoves.isEmpty()
           && bestMoves.get(0).playouts >= Lizzie.config.autoAnaDiffFirstPlayouts) {
@@ -1759,6 +1760,7 @@ public class Leelaz {
       Lizzie.board.getHistory().getCurrentHistoryNode().analyzed = true;
       return;
     }
+    if (!autoPassReady()) return;
     if (Lizzie.config.autoAnaFirstPlayouts > 0) {
       if (!bestMoves.isEmpty() && bestMoves.get(0).playouts >= Lizzie.config.autoAnaFirstPlayouts) {
         Lizzie.board.getHistory().getCurrentHistoryNode().analyzed = true;
@@ -1806,6 +1808,7 @@ public class Leelaz {
       analyzeNextMove(isLastMove);
       return;
     }
+    if (!autoPassReady()) return;
     if (Lizzie.config.autoAnaFirstPlayouts > 0) {
       if (!bestMoves.isEmpty() && bestMoves.get(0).playouts >= Lizzie.config.autoAnaFirstPlayouts) {
         analyzeNextMove(isLastMove);
@@ -3112,8 +3115,8 @@ public class Leelaz {
 
   /** Snapshot on the main engine's thread; the helper never reads mutable board history. */
   private synchronized void syncPassAnalysis() {
-    if (!Lizzie.config.analyzePassValue) { closePassEngine(); return; }
-    if (!canUseSupplemental() || !passNeedsWork() || engineCommand.trim().isEmpty()) return;
+    if (!isPassValueEnabled()) { closePassEngine(); return; }
+    if (!canRunPassAnalysis() || !passNeedsWork() || engineCommand.trim().isEmpty()) return;
     final BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
     final String context = analysisContext();
     List<String> setup = new ArrayList<>();
@@ -3137,10 +3140,10 @@ public class Leelaz {
         engineCommand, useJavaSSH, ip, port, userName, password, useKeyGen, keyGenPath));
     final long generation = passGeneration;
     passEngine.request(node, context + "#" + generation, setup, node.getData().blackToPlay,
-        Lizzie.config.passValueVisits, getInterval(), new PassAnalysisEngine.Listener() {
+        passValueMinimum(), getInterval(), new PassAnalysisEngine.Listener() {
           public void result(int visits, double score) {
             synchronized (Leelaz.this) {
-              if (generation != passGeneration || Leelaz.this != Lizzie.leelaz || !Lizzie.config.analyzePassValue
+              if (generation != passGeneration || Leelaz.this != Lizzie.leelaz || !isPassValueEnabled()
                   || node != Lizzie.board.getHistory().getCurrentHistoryNode()
                   || !context.equals(analysisContext())) return;
               BoardData data = node.getData();
@@ -3149,11 +3152,29 @@ public class Leelaz {
                 data.passAnalysisScore = score;
                 data.passAnalysisVisits = visits;
                 Lizzie.frame.refresh(1);
+                if (Lizzie.config.isAutoAna && visits >= passValueMinimum()) {
+                  SwingUtilities.invokeLater(() -> {
+                    synchronized (Leelaz.this) {
+                      if (generation == passGeneration && Lizzie.config.isAutoAna
+                          && node == Lizzie.board.getHistory().getCurrentHistoryNode()
+                          && context.equals(analysisContext())) notifyAutoAnalysisProgress();
+                    }
+                  });
+                }
               }
             }
           }
           public void failed(String message) {
             System.err.println("Pass-value helper stopped: " + message);
+            SwingUtilities.invokeLater(() -> {
+              synchronized (Leelaz.this) {
+                if (generation != passGeneration || !Lizzie.config.isAutoAna
+                    || !Lizzie.config.autoAnaPassValue
+                    || node != Lizzie.board.getHistory().getCurrentHistoryNode()) return;
+                LizzieFrame.toolbar.stopAutoAna(false, true);
+                Utils.showMsg(Lizzie.resourceBundle.getString("StartAnaDialog.passFailed") + message);
+              }
+            });
           }
         });
   }
@@ -3172,11 +3193,50 @@ public class Leelaz {
         + "|" + Lizzie.config.currentKataGoRules + "|" + Lizzie.board.getData().analysisCacheGeneration;
   }
 
+  public boolean isPassValueEnabled() {
+    return Lizzie.config.isAutoAna ? Lizzie.config.autoAnaPassValue : Lizzie.config.analyzePassValue;
+  }
+
+  private int passValueMinimum() {
+    return Lizzie.config.isAutoAna ? Lizzie.config.autoAnaPassValueVisits : Lizzie.config.passValueVisits;
+  }
+
+  private boolean canRunPassAnalysis() {
+    if (Lizzie.config.isAutoAna) {
+      boolean black = Lizzie.board.getData().blackToPlay;
+      if (!Lizzie.frame.isAutoAnalyzingDiffNode
+          && ((black && !Lizzie.config.anaBlack) || (!black && !Lizzie.config.anaWhite))) return false;
+      if (!Lizzie.frame.isAutoAnalyzingDiffNode && !Lizzie.config.analyzeAllBranch
+          && Lizzie.config.autoAnaEndMove >= 0
+          && Lizzie.board.getData().moveNumber > Lizzie.config.autoAnaEndMove) return false;
+    }
+    return isKatago && this == Lizzie.leelaz && isPondering && !noAnalyze && !isheatmap
+        && !Lizzie.config.isDoubleEngineMode() && !EngineManager.isEngineGame
+        && !Lizzie.frame.isPlayingAgainstLeelaz && !Lizzie.frame.isAnaPlayingAgainstLeelaz
+        && !Lizzie.frame.isKeepingForce && !LizzieFrame.isKeepForcing && !LizzieFrame.isTempForcing;
+  }
+
   private boolean passNeedsWork() {
     BoardData data = Lizzie.board.getData();
-    return Lizzie.config.analyzePassValue
+    return isPassValueEnabled()
         && (!analysisContext().equals(data.passAnalysisEngine)
-            || data.passAnalysisVisits < Lizzie.config.passValueVisits);
+            || data.passAnalysisVisits < passValueMinimum());
+  }
+
+  private boolean autoPassReady() {
+    if (!Lizzie.config.autoAnaPassValue) return true;
+    syncPassAnalysis();
+    if (passNeedsWork()) return false;
+    // Retain a read-only summary in the SGF, without treating it as an engine cache on reload.
+    BoardData data = Lizzie.board.getData();
+    data.setAutoPassSummary(MoveValue.comment(data));
+    return true;
+  }
+
+  private void notifyAutoAnalysisProgress() {
+    if (Lizzie.frame.isAutoAnalyzingDiffNode) nofityDiffAna();
+    else if (Lizzie.config.analyzeAllBranch) notifyAutoAnaAllBranch();
+    else notifyAutoAna();
   }
 
   private java.util.Set<String> candidateTargets() {
@@ -3272,7 +3332,7 @@ public class Leelaz {
     supplementalKind = "";
     primaryLimitReached = false;
     if (isPondering) ponder();
-    else if (!Lizzie.config.analyzePassValue) closePassEngine();
+    else if (!isPassValueEnabled()) closePassEngine();
   }
 
   public void analyzeAvoid(String type, String color, String coordList, int untilMove) {

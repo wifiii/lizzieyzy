@@ -3375,6 +3375,12 @@ public class BottomToolbar extends JPanel {
   }
 
   public void startAutoAna() {
+    if (Lizzie.config.autoAnaPassValue
+        && (!Lizzie.leelaz.isKatago || Lizzie.config.isDoubleEngineMode())) {
+      chkAutoAnalyse.setSelected(false);
+      Utils.showMsg(Lizzie.resourceBundle.getString("StartAnaDialog.passRequiresKataGo"));
+      return;
+    }
     if (threadAnalyzeDiffNode != null) threadAnalyzeDiffNode.interrupt();
     Lizzie.frame.isAutoAnalyzingDiffNode = false;
     chkAutoAnalyse.setSelected(true);

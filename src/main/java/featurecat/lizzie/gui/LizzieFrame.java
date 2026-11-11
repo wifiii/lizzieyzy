@@ -7027,7 +7027,12 @@ public class LizzieFrame extends JFrame {
                 + Lizzie.resourceBundle.getString("SGFParse.seconds");
       }
     }
-    if (Lizzie.config.analyzePassValue && !isLoadingEngine) {
+    boolean showAutoPassValue = Lizzie.config.autoAnaPassValue
+        && (Lizzie.config.isAutoAna
+            || featurecat.lizzie.analysis.MoveValue.available(Lizzie.board.getData())
+            || Lizzie.board.getData().getProperty(
+                featurecat.lizzie.analysis.MoveValue.SAVED_VALUE_PROPERTY) != null);
+    if ((Lizzie.config.analyzePassValue || showAutoPassValue) && !isLoadingEngine) {
       String valueComment = featurecat.lizzie.analysis.MoveValue.comment(Lizzie.board.getData());
       comment += (comment.isEmpty() ? "" : "\n") + valueComment;
     }

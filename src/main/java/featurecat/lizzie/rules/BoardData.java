@@ -3,6 +3,7 @@ package featurecat.lizzie.rules;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.MoveData;
+import featurecat.lizzie.analysis.MoveValue;
 import featurecat.lizzie.gui.LizzieFrame;
 import java.util.*;
 
@@ -120,6 +121,10 @@ public class BoardData {
   //	public boolean commented=true;
   //	public boolean commented2=true;
 
+  private volatile String autoPassSummary = "";
+
+  public void setAutoPassSummary(String summary) { autoPassSummary = summary; }
+
   // Node properties
   private Map<String, String> properties = new HashMap<String, String>();
 
@@ -192,6 +197,7 @@ public class BoardData {
    * @return
    */
   public String getProperty(String key) {
+    if (MoveValue.SAVED_VALUE_PROPERTY.equals(key) && !autoPassSummary.isEmpty()) return autoPassSummary;
     return properties.get(key);
   }
 
@@ -243,6 +249,13 @@ public class BoardData {
    * @return
    */
   public String propertiesString() {
+    // Do not modify the map iterated by the Swing board renderer from engine threads.
+    String summary = autoPassSummary;
+    if (!summary.isEmpty()) {
+      Map<String, String> savedProperties = new HashMap<>(properties);
+      savedProperties.put(MoveValue.SAVED_VALUE_PROPERTY, summary);
+      return SGFParser.propertiesString(savedProperties);
+    }
     return SGFParser.propertiesString(properties);
   }
 

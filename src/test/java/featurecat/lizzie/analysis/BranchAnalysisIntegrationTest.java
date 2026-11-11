@@ -47,9 +47,15 @@ public class BranchAnalysisIntegrationTest {
   @Before public void setupPosition() throws Exception {
     engine = Lizzie.leelaz;
     originalEngineCommand = engine.engineCommand();
+    Lizzie.config.isAutoAna = false;
+    Lizzie.config.autoAnaPassValue = false;
+    Lizzie.config.autoAnaPassValueVisits = 1000;
+    Lizzie.config.analyzeAllBranch = false;
+    Lizzie.frame.isAutoAnalyzingDiffNode = false;
     Lizzie.config.enableLizzieCache = true;
     Lizzie.config.supplementCandidates = false;
     Lizzie.config.analyzePassValue = false;
+    Lizzie.config.passValueVisits = 1000;
     Lizzie.config.showMoveValue = false;
     Lizzie.config.suggestionInfoWinrate = 1;
     Lizzie.config.suggestionInfoPlayouts = 2;
@@ -349,6 +355,8 @@ public class BranchAnalysisIntegrationTest {
   }
 
   @After public void closeHelper() throws Exception {
+    Lizzie.config.isAutoAna = false;
+    Lizzie.frame.isAutoAnalyzingDiffNode = false;
     Method close = Leelaz.class.getDeclaredMethod("closePassEngine");
     close.setAccessible(true);
     close.invoke(engine);
@@ -554,6 +562,199 @@ public class BranchAnalysisIntegrationTest {
     awaitPass();
     assertTrue(helperCommands().contains("kata-set-param analysisWideRootNoise 0.05"));
     assertEquals(1, helperCommands().split("START", -1).length - 1);
+  }
+
+  private void automaticPass(boolean enabled, int minimum) throws Exception {
+    automaticPass(enabled, minimum, "normal");
+  }
+
+  private void automaticPass(boolean enabled, int minimum, String mode) throws Exception {
+    Lizzie.config.isAutoAna = true;
+    Lizzie.config.autoAnaPassValue = enabled;
+    Lizzie.config.autoAnaPassValueVisits = minimum;
+    Lizzie.config.anaBlack = true;
+    Lizzie.config.anaWhite = true;
+    Lizzie.config.autoAnaEndMove = -1;
+    Lizzie.config.autoAnaTime = -1;
+    Lizzie.config.autoAnaPlayouts = 100;
+    Lizzie.config.autoAnaFirstPlayouts = -1;
+    usePassHelper(mode);
+    Lizzie.config.analyzePassValue = false; // Automatic settings are independent.
+  }
+
+  @Test public void automaticAnalysisWaitsForItsOwnPassMinimumBeforeAdvancing() throws Exception {
+    automaticPass(true, 4000);
+    featurecat.lizzie.rules.BoardHistoryNode root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    info(move("Q16", 100, 0.6));
+    assertSame(root, Lizzie.board.getHistory().getCurrentHistoryNode());
+    await(() -> root != Lizzie.board.getHistory().getCurrentHistoryNode());
+    assertTrue(root.getData().passAnalysisVisits >= 4000);
+    assertTrue(Double.isFinite(root.getData().passAnalysisScore));
+    assertFalse(Lizzie.config.analyzePassValue);
+    assertEquals(1000, Lizzie.config.passValueVisits);
+    assertFalse(commands.toString("UTF-8").contains("play B pass"));
+  }
+
+  @Test public void automaticPassCompletionDoesNotBypassOrdinaryThreshold() throws Exception {
+    automaticPass(true, 1000);
+    Object root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    info(move("Q16", 50, 0.6));
+    awaitPass();
+    javax.swing.SwingUtilities.invokeAndWait(() -> {});
+    assertSame(root, Lizzie.board.getHistory().getCurrentHistoryNode());
+    info(move("Q16", 100, 0.6));
+    assertNotSame(root, Lizzie.board.getHistory().getCurrentHistoryNode());
+  }
+
+  @Test public void disablingAutomaticPassDoesNotUseTheManualPassSetting() throws Exception {
+    automaticPass(false, 1000);
+    Lizzie.config.analyzePassValue = true;
+    Object root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    info(move("Q16", 100, 0.6));
+    assertNotSame(root, Lizzie.board.getHistory().getCurrentHistoryNode());
+    Thread.sleep(200);
+    assertFalse(helperCommands().contains("START"));
+  }
+
+  @Test public void automaticAllBranchCompletionWaitsForPass() throws Exception {
+    automaticPass(true, 1000);
+    Lizzie.config.analyzeAllBranch = true;
+    featurecat.lizzie.rules.BoardHistoryNode root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    info(move("Q16", 100, 0.6));
+    assertFalse(root.analyzed);
+    await(() -> root.analyzed);
+    assertTrue(root.getData().passAnalysisVisits >= 1000);
+    assertSame(root, Lizzie.board.getHistory().getCurrentHistoryNode());
+  }
+
+  @Test public void allBranchTraversalOwnsItsEndMoveBoundaryWithoutPassDeadlock() throws Exception {
+    automaticPass(true, 1000);
+    Lizzie.config.analyzeAllBranch = true;
+    Lizzie.config.autoAnaEndMove = 0;
+    assertTrue(Lizzie.board.nextMove(false));
+    featurecat.lizzie.rules.BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
+    info(move("Q16", 100, 0.6));
+    await(() -> node.analyzed);
+    assertTrue(node.getData().passAnalysisVisits >= 1000);
+  }
+
+  @Test public void strengthenedAnalysisWaitsForPassEvenForNormallySkippedColor() throws Exception {
+    automaticPass(true, 1000);
+    Lizzie.config.anaBlack = false;
+    Lizzie.config.autoAnaDiffFirstPlayouts = 100;
+    Lizzie.frame.isAutoAnalyzingDiffNode = true;
+    featurecat.lizzie.rules.BoardHistoryNode root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    info(move("Q16", 100, 0.6));
+    assertFalse(root.diffAnalyzed);
+    await(() -> root.diffAnalyzed);
+    assertTrue(root.getData().passAnalysisVisits >= 1000);
+  }
+
+  @Test public void automaticAnalysisSkipsUnselectedColorWithoutPassSearch() throws Exception {
+    automaticPass(true, 1000);
+    // Cancel the initial black request before it can produce a result.
+    engine.sendCommand("stop");
+    Lizzie.config.anaBlack = false;
+    featurecat.lizzie.rules.BoardHistoryNode root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    info(move("Q16", 1, 0.6));
+    assertNotSame(root, Lizzie.board.getHistory().getCurrentHistoryNode());
+    assertEquals(0, root.getData().passAnalysisVisits);
+  }
+
+  @Test public void cancellingAutomaticAnalysisPreventsLateHelperAdvancement() throws Exception {
+    automaticPass(true, 1000);
+    Object root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    info(move("Q16", 100, 0.6));
+    Lizzie.config.isAutoAna = false;
+    engine.sendCommand("stop");
+    Thread.sleep(600);
+    javax.swing.SwingUtilities.invokeAndWait(() -> {});
+    assertSame(root, Lizzie.board.getHistory().getCurrentHistoryNode());
+  }
+
+  @Test public void automaticHelperFailureStopsInsteadOfWaitingForever() throws Exception {
+    boolean autoSave = featurecat.lizzie.gui.LizzieFrame.toolbar.chkAnaAutoSave.isSelected();
+    featurecat.lizzie.gui.LizzieFrame.toolbar.chkAnaAutoSave.setSelected(false);
+    javax.swing.Timer dismiss = new javax.swing.Timer(50, e -> {
+      for (java.awt.Window window : java.awt.Window.getWindows())
+        if (window instanceof featurecat.lizzie.gui.HtmlMessage) window.dispose();
+    });
+    dismiss.start();
+    Object root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    try {
+      automaticPass(true, 1000, "fail");
+      info(move("Q16", 100, 0.6));
+      await(() -> !Lizzie.config.isAutoAna);
+      assertSame(root, Lizzie.board.getHistory().getCurrentHistoryNode());
+      assertEquals(0, Lizzie.board.getData().passAnalysisVisits);
+      assertEquals(1, helperCommands().split("START", -1).length - 1);
+    } finally {
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        for (java.awt.Window window : java.awt.Window.getWindows())
+          if (window instanceof featurecat.lizzie.gui.HtmlMessage) window.dispose();
+        dismiss.stop();
+      });
+      featurecat.lizzie.gui.LizzieFrame.toolbar.chkAnaAutoSave.setSelected(autoSave);
+    }
+  }
+
+  @Test public void automaticValueSummarySurvivesSgfSaveWithoutChangingUserComment() throws Exception {
+    automaticPass(true, 1000);
+    Lizzie.config.analyzeAllBranch = true;
+    featurecat.lizzie.rules.BoardHistoryNode root = Lizzie.board.getHistory().getCurrentHistoryNode();
+    root.getData().comment = "User note";
+    info(move("Q16", 100, 0.6));
+    await(() -> root.analyzed);
+    String saved = root.getData().getProperty(MoveValue.SAVED_VALUE_PROPERTY);
+    assertNotNull(saved);
+    assertEquals("User note", root.getData().comment);
+    String sgf = SGFParser.saveToString(false);
+    assertTrue(sgf.contains("LZNV["));
+    Lizzie.config.isAutoAna = false;
+    engine.isKatago = false;
+    assertTrue(SGFParser.loadFromString(sgf));
+    assertEquals(saved, Lizzie.board.getData().getProperty(MoveValue.SAVED_VALUE_PROPERTY));
+    assertEquals(saved, MoveValue.comment(Lizzie.board.getData()));
+    assertFalse(MoveValue.available(Lizzie.board.getData()));
+  }
+
+  @Test public void autoPassDialogPersistsOptionsWithoutChangingManualSettings() throws Exception {
+    java.nio.file.Path configPath = new File("config.txt").toPath();
+    byte[] originalConfig = java.nio.file.Files.readAllBytes(configPath);
+    try {
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        featurecat.lizzie.gui.StartAnaDialog dialog =
+            new featurecat.lizzie.gui.StartAnaDialog(false, Lizzie.frame);
+        try {
+          javax.swing.JCheckBox enabled = (javax.swing.JCheckBox) dialogField(dialog, "chkPassValue");
+          javax.swing.JTextField visits = (javax.swing.JTextField) dialogField(dialog, "txtPassValueVisits");
+          assertFalse(enabled.isSelected());
+          assertFalse(visits.isEnabled());
+          enabled.doClick();
+          assertTrue(visits.isEnabled());
+          visits.setText("12000");
+          Method apply = dialog.getClass().getDeclaredMethod("applyPassSettings");
+          apply.setAccessible(true);
+          assertEquals(true, apply.invoke(dialog));
+          assertTrue(Lizzie.config.autoAnaPassValue);
+          assertEquals(12000, Lizzie.config.autoAnaPassValueVisits);
+          assertFalse(Lizzie.config.analyzePassValue);
+          assertEquals(1000, Lizzie.config.passValueVisits);
+          dialog.setModal(false);
+          dialog.setVisible(true);
+          java.awt.image.BufferedImage screenshot = new java.awt.image.BufferedImage(
+              dialog.getWidth(), dialog.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
+          java.awt.Graphics2D graphics = screenshot.createGraphics();
+          dialog.paint(graphics); graphics.dispose();
+          javax.imageio.ImageIO.write(screenshot, "png", new File("auto-pass-settings.png"));
+          Lizzie.config.save();
+        } catch (Exception error) { throw new RuntimeException(error); }
+        finally { dialog.dispose(); }
+      });
+      featurecat.lizzie.Config reloaded = new featurecat.lizzie.Config();
+      assertTrue(reloaded.autoAnaPassValue);
+      assertEquals(12000, reloaded.autoAnaPassValueVisits);
+    } finally { java.nio.file.Files.write(configPath, originalConfig); }
   }
 
   @Test public void highVisitBadCandidateUsesThemeQualityNotVisitColor() throws Exception {
@@ -777,6 +978,56 @@ public class BranchAnalysisIntegrationTest {
       assertTrue(saved.getBoolean("show-move-value"));
       assertTrue(saved.getBoolean("analyze-pass-value"));
     } finally { java.nio.file.Files.write(configPath, originalConfig); }
+  }
+
+  @Test public void realKataGoAutomaticAnalysisWaitsForPassAndOrdinaryVisits() throws Exception {
+    String binary = System.getProperty("katago.binary");
+    Assume.assumeTrue(binary != null);
+    Process process = new ProcessBuilder(binary, "gtp", "-model",
+        System.getProperty("katago.model"), "-config", System.getProperty("katago.config"))
+        .redirectError(new File("katago-auto-test-stderr.log")).start();
+    set("engineCommand", "\"" + binary + "\" gtp -model \""
+        + System.getProperty("katago.model") + "\" -config \""
+        + System.getProperty("katago.config") + "\"");
+    Thread reader = null;
+    try {
+      set("process", process);
+      set("inputStream", new BufferedReader(new InputStreamReader(process.getInputStream())));
+      set("outputStream", new BufferedOutputStream(process.getOutputStream()));
+      set("cmdQueue", new ArrayDeque<String>());
+      set("cmdNumber", 1);
+      set("currentCmdNum", 0);
+      engine.isLoaded = true;
+      Lizzie.config.isAutoAna = true;
+      Lizzie.config.autoAnaPassValue = true;
+      Lizzie.config.autoAnaPassValueVisits = 8;
+      Lizzie.config.analyzePassValue = false;
+      Lizzie.config.analyzeAllBranch = true;
+      Lizzie.config.anaBlack = true;
+      Lizzie.config.anaWhite = true;
+      Lizzie.config.autoAnaEndMove = -1;
+      Lizzie.config.autoAnaPlayouts = 20;
+      Lizzie.config.autoAnaFirstPlayouts = -1;
+      Lizzie.config.autoAnaTime = -1;
+      featurecat.lizzie.rules.BoardHistoryNode root = Lizzie.board.getHistory().getCurrentHistoryNode();
+      Method read = Leelaz.class.getDeclaredMethod("read");
+      read.setAccessible(true);
+      reader = new Thread(() -> {
+        try { read.invoke(engine); } catch (Exception e) { throw new RuntimeException(e); }
+      });
+      reader.setDaemon(true);
+      reader.start();
+      engine.ponder();
+      await(() -> root.analyzed);
+      assertTrue(root.getData().getPlayouts() >= 20);
+      assertTrue(root.getData().passAnalysisVisits >= 8);
+      assertNotNull(root.getData().getProperty(MoveValue.SAVED_VALUE_PROPERTY));
+      System.out.println("Real KataGo auto-analysis: ordinary >=20 and independent pass >=8 before completion");
+    } finally {
+      Lizzie.config.isAutoAna = false;
+      process.destroy();
+      if (reader != null) reader.join(5000);
+    }
   }
 
   @Test public void realKataGoMeetsEveryBranchMinimum() throws Exception {
