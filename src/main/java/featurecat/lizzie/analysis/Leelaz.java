@@ -70,6 +70,10 @@ public class Leelaz {
   private boolean primaryLimitReached;
   private long searchSliceStarted;
   private long passSliceStarted;
+  private boolean passPositionActive;
+  private boolean passAwaitingAck;
+  private int passCommandId = 1000000000;
+  private final List<Runnable> passDeferredCommands = new ArrayList<>();
   private String branchAnalysisContext = "";
   private boolean branchUsesNodeCache;
   private volatile long analysisRevision;
@@ -297,6 +301,9 @@ public class Leelaz {
   }
 
   public void startEngine(int index) throws IOException {
+    passPositionActive = false;
+    passAwaitingAck = false;
+    passDeferredCommands.clear();
     analysisRevision++;
     if (engineCommand.trim().isEmpty()) {
       Utils.showMsg(Lizzie.resourceBundle.getString("EngineFaied.empty"));
@@ -1173,7 +1180,31 @@ public class Leelaz {
   private void parseLine(String line) {
     // System.out.println(line);
     synchronized (this) {
+      if (passAwaitingAck && (line.equals("=" + passCommandId)
+          || line.startsWith("=" + passCommandId + " ")
+          || line.equals("?" + passCommandId) || line.startsWith("?" + passCommandId + " "))) {
+        isCommandLine = true;
+        passAwaitingAck = false;
+        passPositionActive = line.startsWith("=");
+        if (!passPositionActive) branchSearchRejected = true;
+        List<Runnable> deferred = new ArrayList<>(passDeferredCommands);
+        passDeferredCommands.clear();
+        if (!deferred.isEmpty()) {
+          restorePassPosition();
+          for (Runnable command : deferred) command.run();
+        } else if (passPositionActive) {
+          sendBranchCommand("kata-analyze " + (Lizzie.board.getData().blackToPlay ? "W " : "B ")
+              + getInterval() + addKataTag());
+        } else {
+          branchAnalysis.start(null);
+          supplementalKind = "";
+          if (primaryLimitReached) finishSupplemental();
+          else sendBranchCommand(normalAnalyzeCommand());
+        }
+        return;
+      }
       if (line.startsWith("?") && branchAnalysis.isActive()) {
+        restorePassPosition();
         branchSearchRejected = true;
         branchAnalysis.start(null);
         supplementalKind = "";
@@ -1217,7 +1248,6 @@ public class Leelaz {
           if (canUseSupplemental() && !this.bestMoves.isEmpty()) {
             branchOrdinary = Lizzie.config.showNoSuggCircle ? branchAnalysis.normalMoves()
                 : new ArrayList<>(Lizzie.board.getData().bestMoves);
-            updatePassValue(branchAnalysis.best("pass"));
             showSgfBranchResults();
             if (normalLimitReached()) primaryLimitReached = true;
             if (startNextSupplemental()) {
@@ -2561,7 +2591,13 @@ public class Leelaz {
    *
    * @param command a GTP command containing no newline characters
    */
-  public void sendCommand(String command) {
+  public synchronized void sendCommand(String command) {
+    if (!Boolean.TRUE.equals(branchCommand.get()) && passAwaitingAck) {
+      final String deferredCommand = command;
+      passDeferredCommands.add(() -> sendCommand(deferredCommand));
+      return;
+    }
+    if (!Boolean.TRUE.equals(branchCommand.get())) restorePassPosition();
     if (command.startsWith("kata-set-param ")
         || command.startsWith("kata-set-rules ") || command.startsWith("kata-set-rule "))
       analysisRevision++;
@@ -2629,10 +2665,10 @@ public class Leelaz {
       cmdQueue.addLast(command);
       trySendCommandFromQueue();
     }
-    if (Lizzie.frame.isAutocounting) {
+    if (!Boolean.TRUE.equals(branchCommand.get()) && Lizzie.frame.isAutocounting) {
       Lizzie.frame.zen.sendAndEstimate(command, true);
     }
-    if (Lizzie.config.isDoubleEngineMode()) {
+    if (!Boolean.TRUE.equals(branchCommand.get()) && Lizzie.config.isDoubleEngineMode()) {
       if (Lizzie.leelaz2 != null && this != Lizzie.leelaz2) {
         Lizzie.leelaz2.sendCommand(command);
         Lizzie.leelaz2.startPonderTime = this.startPonderTime;
@@ -2640,7 +2676,13 @@ public class Leelaz {
     }
   }
 
-  public void sendCommandNoLeelaz2(String command) {
+  public synchronized void sendCommandNoLeelaz2(String command) {
+    if (passAwaitingAck) {
+      final String deferredCommand = command;
+      passDeferredCommands.add(() -> sendCommandNoLeelaz2(deferredCommand));
+      return;
+    }
+    restorePassPosition();
     branchAnalysis.clear();
     branchSearchRejected = false;
     supplementalKind = "";
@@ -2693,7 +2735,7 @@ public class Leelaz {
       cmdQueue.addLast(command);
       trySendCommandFromQueue();
     }
-    if (Lizzie.frame.isAutocounting) {
+    if (!Boolean.TRUE.equals(branchCommand.get()) && Lizzie.frame.isAutocounting) {
       Lizzie.frame.zen.sendAndEstimate(command, true);
     }
     if (canSetNotPlayed) {
@@ -3075,12 +3117,25 @@ public class Leelaz {
     supplementalKind = kind;
     branchAnalysis.start(target);
     searchSliceStarted = System.currentTimeMillis();
-    if (kind.equals("pass")) passSliceStarted = searchSliceStarted;
-    // Focus adds visits to pass without restricting the root to pass alone.
-    String restriction = kind.equals("pass") ? " focus pass 1"
-        : " allow " + (Lizzie.board.getData().blackToPlay ? "B" : "W")
-            + " " + target + " 1";
-    sendBranchCommand(normalAnalyzeCommand() + restriction);
+    if (kind.equals("pass")) {
+      passSliceStarted = searchSliceStarted;
+      passAwaitingAck = true;
+      passCommandId++;
+      sendBranchCommand(passCommandId + " play "
+          + (Lizzie.board.getData().blackToPlay ? "B" : "W") + " pass");
+    } else {
+      sendBranchCommand(normalAnalyzeCommand() + " allow "
+          + (Lizzie.board.getData().blackToPlay ? "B" : "W") + " " + target + " 1");
+    }
+  }
+
+  private void restorePassPosition() {
+    if (!passPositionActive) return;
+    passPositionActive = false;
+    sendBranchCommand("stop");
+    sendBranchCommand("undo");
+    startPonderTime += System.currentTimeMillis() - passSliceStarted;
+    searchSliceStarted = System.currentTimeMillis();
   }
 
   private boolean normalLimitReached() {
@@ -3102,17 +3157,6 @@ public class Leelaz {
     return Lizzie.config.analyzePassValue
         && (!analysisContext().equals(data.passAnalysisEngine)
             || data.passAnalysisVisits < Lizzie.config.passValueVisits);
-  }
-
-  private void updatePassValue(MoveData pass) {
-    if (pass == null || !pass.coordinate.equalsIgnoreCase("pass") || !pass.isKataData) return;
-    BoardData data = Lizzie.board.getData();
-    if (!analysisContext().equals(data.passAnalysisEngine)
-        || pass.playouts >= data.passAnalysisVisits) {
-      data.passAnalysisEngine = analysisContext();
-      data.passAnalysisScore = pass.scoreMean;
-      data.passAnalysisVisits = pass.playouts;
-    }
   }
 
   private java.util.Set<String> candidateTargets() {
@@ -3140,6 +3184,7 @@ public class Leelaz {
   }
 
   private void finishSupplemental() {
+    restorePassPosition();
     branchAnalysis.start(null);
     supplementalKind = "";
     stopByLimit = true;
@@ -3170,6 +3215,7 @@ public class Leelaz {
     if (!canUseSupplemental()
         || !branchAnalysis.isPosition(Lizzie.board.getHistory().getCurrentHistoryNode())
         || !branchAnalysisContext.equals(analysisContext())) {
+      restorePassPosition();
       branchAnalysis.clear();
       supplementalKind = "";
       if (isPondering) ponder();
@@ -3193,19 +3239,33 @@ public class Leelaz {
     }
     int minimum = kind.equals("pass") ? Lizzie.config.passValueVisits
         : kind.equals("candidate") ? Lizzie.config.candidateMinVisits : Lizzie.config.sgfBranchMinVisits;
-    boolean complete = branchAnalysis.accept(moves, minimum);
-    updatePassValue(branchAnalysis.best("pass"));
-    showSgfBranchResults();
-    boolean yieldPass = kind.equals("pass") && !primaryLimitReached
-        && System.currentTimeMillis() - searchSliceStarted >= 500;
-    if (complete || yieldPass) {
+    boolean complete;
+    if (kind.equals("pass")) {
+      // This is a separate root after pass: all scores are now the opponent's.
+      // Do not cache its moves as candidates of the original position.
+      int visits = 0;
+      double score = 0;
+      for (MoveData move : moves) {
+        if (move.isSymmetry || move.playouts <= 0) continue;
+        visits += move.playouts;
+        score += move.scoreMean * move.playouts;
+      }
+      if (visits > 0) {
+        BoardData data = Lizzie.board.getData();
+        data.passAnalysisEngine = analysisContext();
+        data.passAnalysisScore = -score / visits;
+        data.passAnalysisVisits = visits;
+      }
+      complete = visits >= minimum;
+    } else {
+      complete = branchAnalysis.accept(moves, minimum);
+      showSgfBranchResults();
+    }
+    if (complete) {
+      restorePassPosition();
       branchAnalysis.start(null);
       supplementalKind = "";
-      if (kind.equals("pass")) {
-        startPonderTime += System.currentTimeMillis() - passSliceStarted;
-        searchSliceStarted = System.currentTimeMillis();
-      }
-      if (!yieldPass && startNextSupplemental()) {
+      if (startNextSupplemental()) {
         // Continue the next required search.
       } else if (primaryLimitReached) finishSupplemental();
       else sendBranchCommand(normalAnalyzeCommand());
@@ -3216,6 +3276,12 @@ public class Leelaz {
 
   /** Apply changed options without starting a paused analysis session. */
   public synchronized void refreshSgfBranchAnalysis() {
+    if (passAwaitingAck) {
+      // Cancel via the ordinary command path after the pass response arrives.
+      sendCommand(isPondering ? normalAnalyzeCommand() : "stop");
+      return;
+    }
+    restorePassPosition();
     branchAnalysis.clear();
     branchSearchRejected = false;
     supplementalKind = "";
@@ -3428,7 +3494,9 @@ public class Leelaz {
     //	}
   }
 
-  public void clearBestMoves() {
+  public synchronized void clearBestMoves() {
+    if (passAwaitingAck) sendCommand("stop");
+    else restorePassPosition();
     branchAnalysis.clear();
     bestMoves = new ArrayList<>();
     currentTotalPlayouts = 0;
