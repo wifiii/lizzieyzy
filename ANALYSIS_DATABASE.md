@@ -55,6 +55,11 @@ bound to the current position and engine context; results from a lookup invalida
 by navigation, settings changes or stopping are ignored. The comment panel marks
 database hits. The last-move loss is derived from the currently open SGF's previous
 node; user comments and SGF-branch identity are not copied from another game.
+Lookup also runs after navigation while analysis is stopped, without starting a
+search. If navigation invalidates a lookup that was delaying analysis startup,
+startup resumes for the current position. After a completed save, the current
+position displays the database's merged ordinary/pass results; disabling reads
+or explicitly ignoring the position prevents this automatic restoration.
 
 Ordinary and pass components are checked independently against the active targets.
 A full hit can complete automatic analysis without a new search. A missing pass

@@ -73,6 +73,7 @@ public class Leelaz {
   private PassAnalysisEngine passEngine;
   private long passGeneration;
 
+  private boolean databaseRefreshQueued;
   private long databaseEpoch;
   private BoardHistoryNode databaseNode;
   private String databaseContext = "", databaseOptions = "";
@@ -3100,6 +3101,20 @@ public class Leelaz {
         + Lizzie.config.analysisDatabaseConfig;
   }
 
+  /** Read caches after UI navigation commits, including when analysis is stopped. */
+  public synchronized void refreshDatabaseForCurrentPosition() {
+    if (!Lizzie.config.analysisDatabaseEnabled || isPondering || databaseRefreshQueued) return;
+    databaseRefreshQueued = true;
+    SwingUtilities.invokeLater(
+        () -> {
+          synchronized (Leelaz.this) {
+            databaseRefreshQueued = false;
+            if (Leelaz.this == Lizzie.leelaz && !Lizzie.board.isLoadingFile && !isPondering)
+              requestDatabaseRestore();
+          }
+        });
+  }
+
   private synchronized void invalidateDatabaseRequest() {
     databaseEpoch++;
     databasePending = databaseChecked = databaseNormalReady = databaseNormalComplete = false;
@@ -3272,13 +3287,18 @@ public class Leelaz {
           SwingUtilities.invokeLater(
               () -> {
                 synchronized (Leelaz.this) {
-                  if (epoch != databaseEpoch
-                      || node != Lizzie.board.getHistory().getCurrentHistoryNode()) return;
-                  if (!context.equals(analysisContext())
+                  if (epoch != databaseEpoch) return;
+                  // Board.play/undo can request pondering before committing the new history node.
+                  // A stale lookup still owns startup: release it and resume the current position.
+                  if (node != Lizzie.board.getHistory().getCurrentHistoryNode()
+                      || !context.equals(analysisContext())
                       || !options.equals(databaseOptions())
                       || !databaseEligible()) {
                     invalidateDatabaseRequest();
-                    if (isPondering && Leelaz.this == Lizzie.leelaz) ponder();
+                    if (Leelaz.this == Lizzie.leelaz) {
+                      if (isPondering) ponder();
+                      else requestDatabaseRestore();
+                    }
                     return;
                   }
                   databasePending = false;
@@ -3369,6 +3389,7 @@ public class Leelaz {
         || (isPassValueEnabled() && passNeedsWork())
         || databaseRules().isEmpty()) return;
     final BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
+    final String context = analysisContext(), options = databaseOptions();
     final PositionKey position = databasePosition();
     final AnalysisSnapshot snapshot = new AnalysisSnapshot();
     snapshot.normal = AnalysisSnapshot.copy(databaseRawNormal);
@@ -3412,6 +3433,27 @@ public class Leelaz {
                 EngineIdentity.create(
                     command, model, cfg, rules, komiValue, parameters, advantage, remote);
             AnalysisDatabase.save(path, position, identity, snapshot);
+            // Read the durable merge: ordinary and pass rows can come from different searches.
+            final AnalysisSnapshot saved = AnalysisDatabase.load(path, position, identity);
+            SwingUtilities.invokeLater(
+                () -> {
+                  synchronized (Leelaz.this) {
+                    if (Leelaz.this != Lizzie.leelaz
+                        || node != Lizzie.board.getHistory().getCurrentHistoryNode()
+                        || !context.equals(analysisContext()) || !options.equals(databaseOptions())
+                        || !databaseEligible() || !Lizzie.config.analysisDatabaseRead || databaseIgnored.contains(node)) return;
+                    // Never replace a newer live search with a completed older snapshot.
+                    if (!isPondering) {
+                      databaseEpoch++;
+                      databaseNode = node;
+                      databaseContext = context;
+                      databaseOptions = databaseOptions();
+                      databasePending = false;
+                      databaseChecked = true;
+                      restoreDatabaseSnapshot(saved);
+                    }
+                  }
+                });
           } catch (Exception e) {
             SwingUtilities.invokeLater(
                 () -> {

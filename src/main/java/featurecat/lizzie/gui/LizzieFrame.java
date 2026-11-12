@@ -5018,6 +5018,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void refresh() {
+    if (Lizzie.leelaz != null) Lizzie.leelaz.refreshDatabaseForCurrentPosition();
     // 分开各部分刷新,1代表来自info move的刷新
     redrawWinratePaneOnly = false;
     if (independentSubBoard != null && independentSubBoard.isVisible())
@@ -5030,6 +5031,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void refresh(int mode) {
+    if (Lizzie.leelaz != null) Lizzie.leelaz.refreshDatabaseForCurrentPosition();
     // 分开各部分刷新,1代表来自info move的刷新
     redrawWinratePaneOnly = false;
     if (independentSubBoard != null && independentSubBoard.isVisible())
